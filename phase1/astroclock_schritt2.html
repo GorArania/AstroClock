@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AstroClock – Schritt 2: Sonnenzeiger</title>
+
+  <!-- SunCalc von CDN laden. Gibt uns Sonnenhöhe und Azimut. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js"></script>
+
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: #0b1020;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Kleines Debug-Fenster unten links — zum Prüfen ob die Werte plausibel sind */
+    #debug {
+      position: fixed;
+      bottom: 12px;
+      left: 12px;
+      color: #5a7090;
+      font: 12px monospace;
+      line-height: 1.6;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="clock"></canvas>
+  <div id="debug"></div>
+
+  <script>
+    const canvas = document.getElementById('clock');
+    const ctx    = canvas.getContext('2d');
+    const debug  = document.getElementById('debug');
+
+    // === Teststandort (fest bis Schritt 6) ===
+    const LAT = 51.22;   // Zwenkau, Sachsen
+    const LON = 12.32;
+
+    // =============================================================
+    // HERZSTÜCK (unverändert aus Schritt 1):
+    // Wandelt eine Stunde (0..24) in einen Punkt (x, y) auf dem Kreis.
+    // =============================================================
+    function hourToXY(h, radius, cx, cy) {
+      const phi = (h / 24) * 2 * Math.PI;   // Uhrzeigersinn, ab oben
+      return [
+        cx + radius * Math.sin(phi),
+        cy - radius * Math.cos(phi)
+      ];
+    }
+
+    // =============================================================
+    // NEU: Sonnen-Daten aus SunCalc holen
+    // =============================================================
+    function getSunData(now) {
+      // SunCalc.getPosition() erwartet: Date-Objekt, Breitengrad, Längengrad
+      const pos = SunCalc.getPosition(now, LAT, LON);
+
+      // altitude kommt in Bogenmass (-PI/2 .. +PI/2) → in Grad umrechnen
+      const altitudeDeg = pos.altitude * (180 / Math.PI);
+
+      // Stunde als Dezimalzahl (z.B. 13:30 Uhr → 13.5)
+      const h = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+
+      return {
+        h,              // Position auf dem Zifferblatt (Winkel)
+        altitudeDeg,    // Sonnenhöhe in Grad (positiv = über Horizont, negativ = darunter)
+        isDay: altitudeDeg > 0
+      };
+    }
+
+    // =============================================================
+    // NEU: Sonne auf das Canvas zeichnen
+    // =============================================================
+    function drawSun(cx, cy, R, sunData) {
+      const { h, altitudeDeg, isDay } = sunData;
+
+      // --- Radius berechnen ---
+      // Formel: (90 - |Höhe|) / 90 × Außenradius
+      // Bei Horizont (0°)   → Radius = R   (ganz am Rand)
+      // Bei Zenit/Nadir (90°) → Radius = 0 (genau im Mittelpunkt)
+      const sunR = ((90 - Math.abs(altitudeDeg)) / 90) * R;
+
+      // Position der Sonne auf dem Canvas
+      const [sx, sy] = hourToXY(h, sunR, cx, cy);
+
+      const sunSize = R * 0.055;   // Größe des Sonnen-Symbols
+
+      if (isDay) {
+        // --- Tagsüber: hell gelb-orange mit Glüheffekt ---
+
+        // Äußerer Schimmer (groß, weich)
+        const glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, sunSize * 3.5);
+        glow.addColorStop(0,   'rgba(255, 220, 60, 0.35)');
+        glow.addColorStop(1,   'rgba(255, 220, 60, 0)');
+        ctx.beginPath();
+        ctx.arc(sx, sy, sunSize * 3.5, 0, 2 * Math.PI);
+        ctx.fillStyle = glow;
+        ctx.fill();
+
+        // Sonnenscheibe selbst
+        ctx.beginPath();
+        ctx.arc(sx, sy, sunSize, 0, 2 * Math.PI);
+        ctx.fillStyle = '#FFD740';
+        ctx.shadowColor = '#FFB800';
+        ctx.shadowBlur  = 18;
+        ctx.fill();
+        ctx.shadowBlur = 0;   // WICHTIG: immer zurücksetzen, sonst leuchtet alles
+
+      } else {
+        // --- Nachts: dunkle, verschattete Scheibe ---
+        // Sonne ist unter dem Horizont — gleiche Position, aber dunkel dargestellt
+
+        // Dunkler Glimmer (kaum sichtbar, nur Ahnung einer Position)
+        const glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, sunSize * 2.5);
+        glow.addColorStop(0,   'rgba(60, 90, 140, 0.25)');
+        glow.addColorStop(1,   'rgba(60, 90, 140, 0)');
+        ctx.beginPath();
+        ctx.arc(sx, sy, sunSize * 2.5, 0, 2 * Math.PI);
+        ctx.fillStyle = glow;
+        ctx.fill();
+
+        // Verschattete Scheibe
+        ctx.beginPath();
+        ctx.arc(sx, sy, sunSize, 0, 2 * Math.PI);
+        ctx.fillStyle   = '#1a2a45';
+        ctx.strokeStyle = '#3a5070';
+        ctx.lineWidth   = 1.5;
+        ctx.fill();
+        ctx.stroke();
+      }
+    }
+
+    // =============================================================
+    // Horizont-Ring: zeigt wo der Rand (= 0°) ist, als gestrichelte Linie
+    // =============================================================
+    function drawHorizonRing(cx, cy, R) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, 2 * Math.PI);
+      ctx.setLineDash([4, 8]);
+      ctx.strokeStyle = 'rgba(100, 130, 170, 0.3)';
+      ctx.lineWidth   = 1;
+      ctx.stroke();
+      ctx.setLineDash([]);   // Strichelung zurücksetzen
+    }
+
+    // =============================================================
+    // 24h-Zifferblatt (unverändert aus Schritt 1)
+    // =============================================================
+    function drawDial(cx, cy, R) {
+      // Äußerer Rahmenkreis
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, 2 * Math.PI);
+      ctx.strokeStyle = '#cdd6e0';
+      ctx.lineWidth   = 2;
+      ctx.stroke();
+
+      // Stundenmarken und Ziffern
+      for (let h = 0; h < 24; h++) {
+        const istHauptmarke = (h % 6 === 0);
+        const markeAussen   = R;
+        const markeInnen    = R - (istHauptmarke ? size * 0.040 : size * 0.025);
+
+        const [x1, y1] = hourToXY(h, markeAussen, cx, cy);
+        const [x2, y2] = hourToXY(h, markeInnen,  cx, cy);
+
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.lineWidth   = istHauptmarke ? 3 : 1.5;
+        ctx.strokeStyle = istHauptmarke ? '#ffffff' : '#8a97a8';
+        ctx.stroke();
+
+        const [nx, ny] = hourToXY(h, R - size * 0.075, cx, cy);
+        ctx.fillStyle    = istHauptmarke ? '#ffffff' : '#aeb9c7';
+        ctx.font         = (istHauptmarke ? 'bold ' : '') + Math.round(size * 0.035) + 'px system-ui, sans-serif';
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(h), nx, ny);
+      }
+
+      // Mittelpunkt
+      ctx.beginPath();
+      ctx.arc(cx, cy, 3, 0, 2 * Math.PI);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+    }
+
+    // =============================================================
+    // Debug-Anzeige: wichtig zum Prüfen ob die Werte plausibel sind!
+    // =============================================================
+    function updateDebug(now, sunData) {
+      const pad = n => String(Math.round(n)).padStart(5);
+      debug.innerHTML =
+        `Zeit:    ${now.toLocaleTimeString('de-DE')}<br>` +
+        `Höhe:   ${pad(sunData.altitudeDeg)}°  (positiv = über Horizont)<br>` +
+        `Status:  ${sunData.isDay ? '☀ Tag' : '☾ Nacht'}<br>` +
+        `Standort: ${LAT}°N ${LON}°O (Zwenkau)`;
+    }
+
+    // =============================================================
+    // Haupt-Zeichenschleife — läuft jede Sekunde
+    // =============================================================
+    let size = 0;
+
+    function tick() {
+      const now     = new Date();
+      const sunData = getSunData(now);
+      const cx      = size / 2;
+      const cy      = size / 2;
+      const R       = (size / 2) * 0.90;
+
+      ctx.clearRect(0, 0, size, size);
+
+      drawDial(cx, cy, R);
+      drawHorizonRing(cx, cy, R);   // Horizont-Ring (gestrichelt)
+      drawSun(cx, cy, R, sunData);
+
+      updateDebug(now, sunData);
+
+      // Nächste Aktualisierung in 1 Sekunde
+      setTimeout(tick, 1000);
+    }
+
+    // =============================================================
+    // Größe anpassen (hochauflösend, quadratisch)
+    // =============================================================
+    function resize() {
+      const dpr = window.devicePixelRatio || 1;
+      size      = Math.min(window.innerWidth, window.innerHeight);
+
+      canvas.width        = size * dpr;
+      canvas.height       = size * dpr;
+      canvas.style.width  = size + 'px';
+      canvas.style.height = size + 'px';
+
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+
+    window.addEventListener('resize', () => { resize(); });
+    resize();
+    tick();   // loslegen
+  </script>
+</body>
+</html>

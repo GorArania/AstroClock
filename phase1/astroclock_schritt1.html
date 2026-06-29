@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AstroClock – Schritt 1: 24h-Zifferblatt</title>
+  <style>
+    /* Vollbild, kein Scrollbalken, dunkler Hintergrund als Vorschau auf den Nachthimmel */
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: #0b1020;            /* sehr dunkles Blau */
+      overflow: hidden;
+      display: flex;                  /* zentriert das Canvas */
+      align-items: center;
+      justify-content: center;
+    }
+  </style>
+</head>
+<body>
+  <!-- Die Zeichenfläche. Größe wird per JavaScript gesetzt, nicht hier. -->
+  <canvas id="clock"></canvas>
+
+  <script>
+    // === 1. Grundlagen: Canvas und Zeichen-Kontext holen ===
+    const canvas = document.getElementById('clock');
+    const ctx = canvas.getContext('2d');   // "2d" = der normale Zeichen-Werkzeugkasten
+
+    // === 2. Das HERZSTÜCK: Stunde -> Punkt (x, y) auf dem Kreis ===
+    // h        = Stunde (0..24), darf auch Kommazahl sein (z.B. 13.5 = halb 2)
+    // radius   = Abstand vom Mittelpunkt
+    // cx, cy   = Mittelpunkt der Uhr
+    // Ergebnis: [x, y] = Bildschirm-Koordinaten dieses Punktes
+    function hourToXY(h, radius, cx, cy) {
+      // 24 Stunden auf einen vollen Kreis (2*PI im Bogenmaß) verteilen.
+      // -> 15 Grad pro Stunde, hier direkt in Bogenmaß gerechnet.
+      const phi = (h / 24) * 2 * Math.PI;   // Winkel im Uhrzeigersinn, gemessen ab "oben"
+
+      const x = cx + radius * Math.sin(phi);
+      const y = cy - radius * Math.cos(phi);   // MINUS, weil y auf dem Canvas nach unten wächst
+      return [x, y];
+    }
+
+    // === 3. Die komplette Uhr zeichnen ===
+    function draw(size) {
+      const cx = size / 2;            // Mittelpunkt x
+      const cy = size / 2;            // Mittelpunkt y
+      const R  = (size / 2) * 0.90;   // Außenradius des Zifferblatts (10% Rand frei lassen)
+
+      ctx.clearRect(0, 0, size, size);   // Fläche leeren
+
+      // --- 3a. Äußerer Rahmenkreis ---
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, 2 * Math.PI);   // Vollkreis
+      ctx.strokeStyle = '#cdd6e0';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // --- 3b. Stundenmarken + Ziffern (Schleife über alle 24 Stunden) ---
+      for (let h = 0; h < 24; h++) {
+        // Die vier "Haupt-Stunden" 0, 6, 12, 18 betonen wir kräftiger.
+        const istHauptmarke = (h % 6 === 0);
+
+        // Stundenmarke: kurze Linie vom Außenring nach innen
+        const markeAussen = R;
+        const markeInnen  = R - (istHauptmarke ? size * 0.040 : size * 0.025);
+        const [x1, y1] = hourToXY(h, markeAussen, cx, cy);
+        const [x2, y2] = hourToXY(h, markeInnen,  cx, cy);
+
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.lineWidth   = istHauptmarke ? 3 : 1.5;
+        ctx.strokeStyle = istHauptmarke ? '#ffffff' : '#8a97a8';
+        ctx.stroke();
+
+        // Ziffer etwas weiter innen platzieren
+        const [nx, ny] = hourToXY(h, R - size * 0.075, cx, cy);
+        ctx.fillStyle    = istHauptmarke ? '#ffffff' : '#aeb9c7';
+        ctx.font         = (istHauptmarke ? 'bold ' : '') + Math.round(size * 0.035) + 'px system-ui, sans-serif';
+        ctx.textAlign    = 'center';     // Text horizontal um den Punkt zentrieren
+        ctx.textBaseline = 'middle';     // Text vertikal um den Punkt zentrieren
+        ctx.fillText(String(h), nx, ny);
+      }
+
+      // --- 3c. Mittelpunkt markieren (später Ausgangspunkt des Sonnen-Zeigers) ---
+      ctx.beginPath();
+      ctx.arc(cx, cy, 3, 0, 2 * Math.PI);
+      ctx.fillStyle = '#ffffff';
+      ctx.fill();
+    }
+
+    // === 4. Canvas-Größe setzen und scharf rendern ===
+    // Wir machen die Uhr quadratisch und so groß wie das kleinere Fenstermaß zulaesst.
+    // devicePixelRatio sorgt dafuer, dass es auf hochaufloesenden Displays nicht unscharf wird.
+    function resize() {
+      const dpr  = window.devicePixelRatio || 1;
+      const size = Math.min(window.innerWidth, window.innerHeight);
+
+      canvas.width  = size * dpr;            // echte Pixel-Aufloesung
+      canvas.height = size * dpr;
+      canvas.style.width  = size + 'px';     // angezeigte Groesse
+      canvas.style.height = size + 'px';
+
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // alle Zeichnungen passend skalieren
+      draw(size);
+    }
+
+    // Bei Fenster-Groessenaenderung neu zeichnen, und einmal beim Start.
+    window.addEventListener('resize', resize);
+    resize();
+  </script>
+</body>
+</html>

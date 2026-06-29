@@ -1,0 +1,10 @@
+# Android
+phase2/.gradle/
+phase2/build/
+phase2/local.properties
+phase2/*.iml
+.idea/
+
+# System
+.DS_Store
+Thumbs.db
