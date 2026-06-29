@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AstroClock – Schritt 5d: Mondzeit-Labels</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js"></script>
+  <style>
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      background: #0b1020;
+      overflow: hidden;
+      display: flex; align-items: center; justify-content: center;
+      font-family: system-ui, sans-serif;
+    }
+    #loading {
+      position: fixed;
+      color: #aeb9c7;
+      font-size: 1.1em;
+      text-align: center;
+      line-height: 2;
+    }
+    #debug {
+      position: fixed; bottom: 12px; left: 12px;
+      color: #5a7090; font: 12px monospace; line-height: 1.6; pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <!-- Canvas ist zunächst unsichtbar — erscheint erst wenn Katalog geladen -->
+  <canvas id="clock" style="display:none"></canvas>
+  <div id="loading">⭐ Lade Sternkatalog + Sternbilder…<br><small>( einmalig, danach im Browser-Cache )</small></div>
+  <div id="debug"></div>
+
+  <script>
+    const canvas    = document.getElementById('clock');
+    const ctx       = canvas.getContext('2d');
+    const loadingEl = document.getElementById('loading');
+    const debugEl   = document.getElementById('debug');
+
+    const LAT = 51.22;
+    const LON = 12.32;
+
+    // ============================================================
+    // Basis-Hilfsfunktionen (unverändert aus Schritt 4)
+    // ============================================================
+    function normalizeAngle(a) {
+      return ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    }
+
+    function hourToXY(h, radius, cx, cy) {
+      const phi = (h / 24) * 2 * Math.PI;
+      return [cx + radius * Math.sin(phi), cy - radius * Math.cos(phi)];
+    }
+
+    function getLST(date, lonDeg) {
+      const JD = date.getTime() / 86400000.0 + 2440587.5;
+      let gmst = 280.46061837 + 360.98564736629 * (JD - 2451545.0);
+      return ((gmst + lonDeg) % 360 + 360) % 360;
+    }
+
+    function equatToHoriz(ra_h, dec_deg, lstDeg, lat_deg) {
+      const H   = ((lstDeg - ra_h * 15) % 360 + 360) % 360;
+      const H_r = H * Math.PI / 180;
+      const d   = dec_deg * Math.PI / 180;
+      const l   = lat_deg * Math.PI / 180;
+      const sinAlt = Math.sin(d)*Math.sin(l) + Math.cos(d)*Math.cos(l)*Math.cos(H_r);
+      const altDeg = Math.asin(Math.max(-1, Math.min(1, sinAlt))) * 180 / Math.PI;
+      const altR   = altDeg * Math.PI / 180;
+      const cosAz  = (Math.sin(d) - Math.sin(altR)*Math.sin(l)) / (Math.cos(altR)*Math.cos(l));
+      let azDeg    = Math.acos(Math.max(-1, Math.min(1, cosAz))) * 180 / Math.PI;
+      if (Math.sin(H_r) > 0) azDeg = 360 - azDeg;
+      return { altDeg, azDeg };
+    }
+
+    function skyToDialXY(azDeg, altDeg, rotation, cx, cy, R) {
+      const clockAngle = normalizeAngle(azDeg * Math.PI / 180 + rotation);
+      const h = (clockAngle / (2 * Math.PI)) * 24;
+      const r = (90 - Math.abs(altDeg)) / 90 * R;
+      return hourToXY(h, r, cx, cy);
+    }
+
+    // ============================================================
+    // Sternfarbe aus B-V Farbindex (Spektraltyp)
+    // B-V < 0: heiß, blau — B-V > 1.5: kühl, rot
+    // ============================================================
+    function bvToColor(bv) {
+      if (bv === null || bv === undefined || isNaN(bv)) return '#ffffff';
+      if (bv < -0.3) return '#9bb0ff';  // O: Blau
+      if (bv <  0.0) return '#aabfff';  // B: Blauweiss
+      if (bv <  0.3) return '#cad7ff';  // A: Weissblau (z.B. Sirius, Vega)
+      if (bv <  0.6) return '#f8f7ff';  // F: Weiss
+      if (bv <  0.8) return '#fff4ea';  // G: Gelbweiss (wie unsere Sonne)
+      if (bv <  1.2) return '#ffd2a1';  // K: Orange (z.B. Arcturus)
+      return '#ffad51';                   // M: Rot-Orange (z.B. Betelgeuse)
+    }
+
+    function bvToGlowColor(bv) {
+      if (bv === null || bv === undefined || isNaN(bv)) return [200, 215, 255];
+      if (bv < 0.3) return [170, 190, 255];  // bläulich
+      if (bv < 0.8) return [220, 230, 255];  // weisslich
+      if (bv < 1.2) return [255, 235, 200];  // gelblich
+      return [255, 190, 130];                  // orangerot
+    }
+
+    // ============================================================
+    // Daten laden: Sternkatalog + Sternbild-Linien (parallel)
+    //
+    // MAG_LIMIT: nur Sterne bis zu dieser Magnitude anzeigen.
+    // 4.5 → ~750 Sterne, klar und wiedererkennbar.
+    // Zum Vergleich: das blosse Auge sieht bis ca. 6.5 mag.
+    // ============================================================
+    const MAG_LIMIT = 4.5;
+
+    let starCatalog      = [];
+    let constellationData = [];
+
+    async function loadStarCatalog() {
+      const url = 'https://cdn.jsdelivr.net/gh/ofrohn/d3-celestial@master/data/stars.6.json';
+      try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const geojson = await response.json();
+
+        starCatalog = geojson.features
+          .filter(f => f.properties.mag <= MAG_LIMIT)   // NUR helle Sterne
+          .map(f => {
+            const ra_deg  = ((f.geometry.coordinates[0] % 360) + 360) % 360;
+            const dec_deg = f.geometry.coordinates[1];
+            const mag     = f.properties.mag;
+            const bv      = f.properties.bv;
+            const glowRGB = bvToGlowColor(bv);
+            return {
+              ra_h:     ra_deg / 15,
+              dec_deg:  dec_deg,
+              mag:      mag,
+              color:    bvToColor(bv),
+              glow:     `rgba(${glowRGB[0]},${glowRGB[1]},${glowRGB[2]}`,
+              baseR:    Math.max(0.8, 5.0 - mag * 0.7),  // etwas grösser für weniger Sterne
+              isBright: mag < 2.5,
+            };
+          });
+
+        // Hellste Sterne zuletzt rendern (= obendrauf)
+        starCatalog.sort((a, b) => b.mag - a.mag);
+
+        const bright = [...starCatalog].sort((a,b) => a.mag - b.mag)[0];
+        console.log(`Sterne geladen: ${starCatalog.length} (mag ≤ ${MAG_LIMIT})`);
+        console.log('Hellster Stern:', bright.mag.toFixed(1), 'mag, RA', bright.ra_h.toFixed(2)+'h, Dec', bright.dec_deg.toFixed(1)+'°');
+        return true;
+      } catch (err) {
+        console.error('Stern-Ladefehler:', err);
+        return false;
+      }
+    }
+
+    async function loadConstellations() {
+      const url = 'https://cdn.jsdelivr.net/gh/ofrohn/d3-celestial@master/data/constellations.lines.json';
+      try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const geojson = await response.json();
+
+        // Jede Feature = ein Sternbild, Geometry = MultiLineString
+        // Koordinaten: [[RA_deg, Dec_deg], [RA_deg, Dec_deg], ...]
+        constellationData = geojson.features.map(f => ({
+          name:     f.properties.name || f.id,
+          segments: f.geometry.coordinates,  // Array von Linienzügen
+        }));
+
+        console.log(`Sternbilder geladen: ${constellationData.length}`);
+        return true;
+      } catch (err) {
+        console.error('Sternbild-Ladefehler:', err);
+        return false;  // Sternbilder sind optional — App läuft trotzdem
+      }
+    }
+
+    async function loadAllData() {
+      // Beide Dateien parallel laden (schneller als nacheinander)
+      const [starsOk] = await Promise.all([
+        loadStarCatalog(),
+        loadConstellations(),
+      ]);
+      return starsOk;  // Sterne sind Pflicht, Sternbilder optional
+    }
+
+    // ============================================================
+    // Sternenhimmel zeichnen (Hipparcos-Katalog)
+    // ============================================================
+    function drawStarField(cx, cy, R, rotation, lstDeg) {
+      const scaleFactor = size / 700;
+
+      for (const s of starCatalog) {
+        const { altDeg, azDeg } = equatToHoriz(s.ra_h, s.dec_deg, lstDeg, LAT);
+        if (altDeg < 0) continue;
+
+        const [sx, sy] = skyToDialXY(azDeg, altDeg, rotation, cx, cy, R);
+        const starR    = s.baseR * scaleFactor;
+
+        // Weicher Einblend am Horizont (verhindert harte Kante)
+        ctx.globalAlpha = Math.min(1.0, altDeg / 5);
+
+        // Glimmer-Effekt nur für helle Sterne (Mag < 2.5) — performance-relevant
+        if (s.isBright) {
+          const glowR   = starR * 3.5;
+          const opacity = Math.max(0, 0.45 - s.mag * 0.12);
+          const glow    = ctx.createRadialGradient(sx, sy, 0, sx, sy, glowR);
+          glow.addColorStop(0, `${s.glow}, ${opacity})`);
+          glow.addColorStop(1, `${s.glow}, 0)`);
+          ctx.beginPath();
+          ctx.arc(sx, sy, glowR, 0, 2 * Math.PI);
+          ctx.fillStyle = glow;
+          ctx.fill();
+        }
+
+        // Stern-Punkt
+        ctx.beginPath();
+        ctx.arc(sx, sy, starR, 0, 2 * Math.PI);
+        ctx.fillStyle = s.color;
+        ctx.fill();
+      }
+
+      ctx.globalAlpha = 1.0;
+    }
+
+    // ============================================================
+    // NEU: Bahn der Sonne / des Mondes über den Tag (Variante B)
+    //
+    // Für jeden Sample-Zeitpunkt T entlang der Bahn:
+    //   1. Sonnen-/Mond-Azimut und -Höhe zu diesem T berechnen
+    //   2. Sonnen-Azimut zu diesem T berechnen (für die Rotation)
+    //   3. Rotation = Uhrzeit-Winkel(T) - Sonnen-Azimut(T)
+    //   4. Position des Objekts auf der Uhr = Objekt-Azimut + Rotation
+    //
+    // Resultat: jeder Bahn-Punkt liegt da, wo das Objekt zu diesem T
+    // auf dem Zifferblatt stehen WIRD. Endpunkte sind exakt auf den
+    // Auf-/Untergangs-Uhrzeit-Marken.
+    // ============================================================
+
+    function rotationAtTime(date) {
+      const pos = SunCalc.getPosition(date, LAT, LON);
+      const azFromNorth = normalizeAngle(pos.azimuth + Math.PI);
+      const h = date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600;
+      const clockAngle = (h / 24) * 2 * Math.PI;
+      return clockAngle - azFromNorth;
+    }
+
+    function computeSunPath(today) {
+      // SunCalc.getTimes liefert sunrise/sunset für den lokalen Tag
+      const times = SunCalc.getTimes(today, LAT, LON);
+      const rise  = times.sunrise;
+      const set   = times.sunset;
+
+      // Polartage/-nächte abfangen
+      if (!rise || isNaN(rise.getTime()) || !set || isNaN(set.getTime())) return null;
+      if (set <= rise) return null;
+
+      const points = [];
+      const stepMs = 5 * 60 * 1000;  // alle 5 Minuten ein Sample
+
+      for (let t = rise.getTime(); t <= set.getTime(); t += stepMs) {
+        const when = new Date(t);
+        const pos  = SunCalc.getPosition(when, LAT, LON);
+        const altDeg = pos.altitude * 180 / Math.PI;
+        const azDeg  = normalizeAngle(pos.azimuth + Math.PI) * 180 / Math.PI;
+        const rot    = rotationAtTime(when);
+        points.push({ azDeg, altDeg, rotation: rot, time: when });
+      }
+
+      return { rise, set, points };
+    }
+
+    function computeMoonPath(today) {
+      // Mond-Bahn: das aktuelle ODER nächste sichtbare Intervall finden.
+      //
+      // Komplikation: getMoonTimes() liefert Auf-/Untergang innerhalb EINES Tages.
+      // Wenn der Mond heute Abend aufgeht (z.B. 21:51) und morgen früh untergeht
+      // (03:45), dann liefert getMoonTimes() für "heute" ein Paar rise/set, das
+      // sich NICHT auf dieselbe Sichtbarkeitsperiode bezieht.
+      //
+      // Lösung: Wir holen die Auf-/Untergänge für gestern, heute, morgen,
+      // sortieren sie, und finden das nächste Intervall "Mond über Horizont"
+      // das jetzt läuft oder bevorsteht.
+
+      const events = [];   // Liste aller Mond-Ereignisse (rise/set) in einem ±36h Fenster
+      for (let dayOffset = -1; dayOffset <= 1; dayOffset++) {
+        const d = new Date(today.getTime() + dayOffset * 86400000);
+        const t = SunCalc.getMoonTimes(d, LAT, LON);
+        if (t.rise && !isNaN(t.rise.getTime())) events.push({ type: 'rise', time: t.rise });
+        if (t.set  && !isNaN(t.set.getTime()))  events.push({ type: 'set',  time: t.set  });
+      }
+      events.sort((a, b) => a.time - b.time);
+      if (events.length === 0) return null;   // sehr exotische Fälle (z.B. Polargebiete)
+
+      // Aktueller Mondstand: über oder unter Horizont?
+      const nowAlt = SunCalc.getMoonPosition(today, LAT, LON).altitude;
+      const moonUp = nowAlt > 0;
+
+      let rise = null, set = null;
+
+      if (moonUp) {
+        // Letztes rise vor jetzt, nächstes set nach jetzt
+        for (const e of events) {
+          if (e.type === 'rise' && e.time <= today) rise = e.time;
+          if (e.type === 'set'  && e.time >  today && set === null) set = e.time;
+        }
+      } else {
+        // Nächstes rise nach jetzt, danach das nächste set
+        for (const e of events) {
+          if (e.type === 'rise' && e.time > today && rise === null) rise = e.time;
+          if (e.type === 'set'  && rise !== null && e.time > rise && set === null) set = e.time;
+        }
+      }
+
+      if (!rise || !set || set <= rise) return null;
+
+      const points = [];
+      const stepMs = 5 * 60 * 1000;
+      for (let t = rise.getTime(); t <= set.getTime(); t += stepMs) {
+        const when = new Date(t);
+        const pos  = SunCalc.getMoonPosition(when, LAT, LON);
+        const altDeg = pos.altitude * 180 / Math.PI;
+        const azDeg  = normalizeAngle(pos.azimuth + Math.PI) * 180 / Math.PI;
+        const rot    = rotationAtTime(when);
+        points.push({ azDeg, altDeg, rotation: rot, time: when });
+      }
+      return { rise, set, points };
+    }
+
+    function drawPath(cx, cy, R, path, strokeStyle, lineWidth) {
+      if (!path || path.points.length < 2) return;
+
+      ctx.beginPath();
+      for (let i = 0; i < path.points.length; i++) {
+        const p = path.points[i];
+        const [x, y] = skyToDialXY(p.azDeg, p.altDeg, p.rotation, cx, cy, R);
+        if (i === 0) ctx.moveTo(x, y);
+        else         ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = strokeStyle;
+      ctx.lineWidth   = lineWidth;
+      ctx.lineCap     = 'round';
+      ctx.lineJoin    = 'round';
+      ctx.stroke();
+    }
+
+    // ============================================================
+    // NEU: Zeit-Labels an den Endpunkten einer Bahn
+    //
+    // Für die Mondbahn wichtig: die Endpunkte liegen NICHT auf den
+    // Uhrzeit-Marken (anders als bei der Sonne), deshalb braucht es
+    // die explizite Zeit-Beschriftung.
+    //
+    // Das Label wird radial nach außen vom Endpunkt versetzt, damit
+    // es nicht das Zifferblatt überdeckt.
+    // ============================================================
+    function drawPathEndpointLabel(cx, cy, R, point, timeStr, color) {
+      const [x, y] = skyToDialXY(point.azDeg, point.altDeg, point.rotation, cx, cy, R);
+
+      // Richtung vom Mittelpunkt zum Endpunkt
+      const dx = x - cx, dy = y - cy;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if (dist < 1) return;
+
+      // Label nach innen versetzen, weil der Endpunkt nahe am Rand ist
+      const offset = -size * 0.045;  // negativ = nach innen
+      const lx = x + (dx / dist) * offset;
+      const ly = y + (dy / dist) * offset;
+
+      // Kleiner Markierungspunkt am Endpunkt selbst
+      ctx.beginPath();
+      ctx.arc(x, y, 2.5, 0, 2 * Math.PI);
+      ctx.fillStyle = color;
+      ctx.fill();
+
+      // Text mit dunklem Hintergrund-Halo (Lesbarkeit)
+      ctx.font         = Math.round(size * 0.020) + 'px system-ui, sans-serif';
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth    = 3;
+      ctx.strokeStyle  = 'rgba(11, 16, 32, 0.85)';
+      ctx.strokeText(timeStr, lx, ly);
+      ctx.fillStyle    = color;
+      ctx.fillText(timeStr, lx, ly);
+    }
+
+    function formatTime(date) {
+      const h = String(date.getHours()).padStart(2, '0');
+      const m = String(date.getMinutes()).padStart(2, '0');
+      return `${h}:${m}`;
+    }
+
+    // ============================================================
+    // Jedes Sternbild ist ein Netz von Linien zwischen Sternen.
+    // Wenn ein Endpunkt unter dem Horizont liegt, wird der Strich
+    // dort "abgehoben" — der sichtbare Teil bleibt trotzdem korrekt.
+    // ============================================================
+    function drawConstellations(cx, cy, R, rotation, lstDeg) {
+      ctx.strokeStyle = 'rgba(100, 145, 210, 0.40)';
+      ctx.lineWidth   = Math.max(0.8, size * 0.0012);
+      ctx.lineCap     = 'round';
+
+      for (const c of constellationData) {
+        for (const segment of c.segments) {
+          // Ein Segment = Folge von [RA_deg, Dec_deg] Punkten, die verbunden werden
+          ctx.beginPath();
+          let penDown     = false;  // wurde ctx.moveTo schon gesetzt?
+          let lastAbove   = false;
+
+          for (const pt of segment) {
+            const ra_h    = ((pt[0] % 360) + 360) % 360 / 15;
+            const { altDeg, azDeg } = equatToHoriz(ra_h, pt[1], lstDeg, LAT);
+
+            if (altDeg < 0) {
+              // Dieser Punkt ist unter dem Horizont → Stift abheben
+              penDown   = false;
+              lastAbove = false;
+              continue;
+            }
+
+            const [sx, sy] = skyToDialXY(azDeg, altDeg, rotation, cx, cy, R);
+
+            if (!penDown) {
+              ctx.moveTo(sx, sy);
+              penDown = true;
+            } else {
+              ctx.lineTo(sx, sy);
+            }
+            lastAbove = true;
+          }
+          ctx.stroke();
+        }
+      }
+    }
+
+    // ============================================================
+    // ============================================================
+    const COMPASS_PTS = [
+      { label: 'N', az: 0,   color: '#ffcc44' },
+      { label: 'E', az: 90,  color: 'rgba(160,185,220,0.9)' },
+      { label: 'S', az: 180, color: 'rgba(160,185,220,0.9)' },
+      { label: 'W', az: 270, color: 'rgba(160,185,220,0.9)' },
+    ];
+
+    function drawCompass(cx, cy, R, rotation) {
+      for (const c of COMPASS_PTS) {
+        const clockAngle = normalizeAngle(c.az * Math.PI / 180 + rotation);
+        const h = (clockAngle / (2 * Math.PI)) * 24;
+        const [mx, my] = hourToXY(h, R * 0.94, cx, cy);
+        ctx.fillStyle = c.color;
+        ctx.font = 'bold ' + Math.round(size * 0.022) + 'px system-ui, sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(c.label, mx, my);
+      }
+    }
+
+    // ============================================================
+    // Sonnen- und Mond-Daten (unverändert aus Schritt 4)
+    // ============================================================
+    function getSunData(now) {
+      const pos = SunCalc.getPosition(now, LAT, LON);
+      const altitudeDeg = pos.altitude * (180 / Math.PI);
+      const h = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+      const azimuthFromNorth = normalizeAngle(pos.azimuth + Math.PI);
+      return { h, altitudeDeg, isDay: altitudeDeg > 0, azimuthFromNorth };
+    }
+
+    function getMoonData(now, rotation) {
+      const moonPos = SunCalc.getMoonPosition(now, LAT, LON);
+      const moonIll = SunCalc.getMoonIllumination(now);
+      const moonAltDeg = moonPos.altitude * (180 / Math.PI);
+      const moonAzDeg  = normalizeAngle(moonPos.azimuth + Math.PI) * 180 / Math.PI;
+      const ca = normalizeAngle(moonAzDeg * Math.PI / 180 + rotation);
+      return {
+        h: (ca / (2 * Math.PI)) * 24,
+        altitudeDeg: moonAltDeg,
+        isAboveHorizon: moonAltDeg > 0,
+        phase: moonIll.phase,
+      };
+    }
+
+    // ============================================================
+    // Alle Zeichenfunktionen (unverändert aus Schritt 3/4)
+    // ============================================================
+
+    function drawMoonPhase(cx, cy, r, phase) {
+      const dark = '#1a2840', lit = '#dde8f5';
+      ctx.save();
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2*Math.PI); ctx.clip();
+      ctx.fillStyle = dark; ctx.fillRect(cx-r-1, cy-r-1, 2*r+2, 2*r+2);
+      const waxing = phase <= 0.5;
+      ctx.fillStyle = lit;
+      if (waxing) { ctx.beginPath(); ctx.arc(cx,cy,r,-Math.PI/2,Math.PI/2); ctx.closePath(); ctx.fill(); }
+      else        { ctx.beginPath(); ctx.arc(cx,cy,r,Math.PI/2,3*Math.PI/2); ctx.closePath(); ctx.fill(); }
+      const termX = r * Math.cos(phase * 2 * Math.PI);
+      if (waxing) {
+        if (termX > 0) { ctx.fillStyle=dark; ctx.beginPath(); ctx.ellipse(cx,cy,termX,r,0,-Math.PI/2,Math.PI/2); ctx.closePath(); ctx.fill(); }
+        if (termX < 0) { ctx.fillStyle=lit;  ctx.beginPath(); ctx.ellipse(cx,cy,-termX,r,0,Math.PI/2,3*Math.PI/2); ctx.closePath(); ctx.fill(); }
+      } else {
+        if (termX < 0) { ctx.fillStyle=lit;  ctx.beginPath(); ctx.ellipse(cx,cy,-termX,r,0,-Math.PI/2,Math.PI/2); ctx.closePath(); ctx.fill(); }
+        if (termX > 0) { ctx.fillStyle=dark; ctx.beginPath(); ctx.ellipse(cx,cy,termX,r,0,Math.PI/2,3*Math.PI/2); ctx.closePath(); ctx.fill(); }
+      }
+      ctx.restore();
+    }
+
+    function drawMoon(cx, cy, R, moonData) {
+      const { h, altitudeDeg, isAboveHorizon, phase } = moonData;
+
+      // FIX: Mond unter dem Horizont → gar nicht anzeigen
+      // (Früher: 40% Opazität → führte zu falscher Position im Sternbild Großer Wagen)
+      if (!isAboveHorizon) return;
+
+      const moonR = ((90-Math.abs(altitudeDeg))/90)*R;
+      const [mx,my] = hourToXY(h, moonR, cx, cy);
+      const moonSize = R*0.042;
+      ctx.globalAlpha = 1.0;
+      const glow = ctx.createRadialGradient(mx,my,0,mx,my,moonSize*3);
+      glow.addColorStop(0,'rgba(180,205,235,0.22)'); glow.addColorStop(1,'rgba(180,205,235,0)');
+      ctx.beginPath(); ctx.arc(mx,my,moonSize*3,0,2*Math.PI); ctx.fillStyle=glow; ctx.fill();
+      drawMoonPhase(mx, my, moonSize, phase);
+      ctx.beginPath(); ctx.arc(mx,my,moonSize,0,2*Math.PI);
+      ctx.strokeStyle='rgba(150,180,220,0.55)'; ctx.lineWidth=1; ctx.stroke();
+      ctx.globalAlpha=1.0;
+    }
+
+    function drawSunHand(cx, cy, R, sunData) {
+      const [tipX,tipY] = hourToXY(sunData.h, R*0.62, cx, cy);
+      ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(tipX,tipY);
+      ctx.strokeStyle = sunData.isDay ? 'rgba(255,210,60,0.45)' : 'rgba(80,110,160,0.45)';
+      ctx.lineWidth=2; ctx.lineCap='round'; ctx.stroke();
+      ctx.beginPath(); ctx.arc(tipX,tipY,3.5,0,2*Math.PI);
+      ctx.fillStyle = sunData.isDay ? 'rgba(255,210,60,0.8)' : 'rgba(80,110,160,0.6)'; ctx.fill();
+    }
+
+    function drawMinuteHand(cx, cy, R, now) {
+      const phi = ((now.getMinutes()+now.getSeconds()/60)/60)*2*Math.PI;
+      const [mx,my] = [cx+R*0.82*Math.sin(phi), cy-R*0.82*Math.cos(phi)];
+      const [sx,sy] = [cx-R*0.05*Math.sin(phi), cy+R*0.05*Math.cos(phi)];
+      ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(mx,my);
+      ctx.strokeStyle='rgba(220,230,240,0.90)'; ctx.lineWidth=1.5; ctx.lineCap='round'; ctx.stroke();
+    }
+
+    function drawSun(cx, cy, R, sunData) {
+      const sunR = ((90-Math.abs(sunData.altitudeDeg))/90)*R;
+      const [sx,sy] = hourToXY(sunData.h, sunR, cx, cy);
+      const sunSize = R*0.055;
+      if (sunData.isDay) {
+        const glow = ctx.createRadialGradient(sx,sy,0,sx,sy,sunSize*3.5);
+        glow.addColorStop(0,'rgba(255,220,60,0.35)'); glow.addColorStop(1,'rgba(255,220,60,0)');
+        ctx.beginPath(); ctx.arc(sx,sy,sunSize*3.5,0,2*Math.PI); ctx.fillStyle=glow; ctx.fill();
+        ctx.beginPath(); ctx.arc(sx,sy,sunSize,0,2*Math.PI);
+        ctx.fillStyle='#FFD740'; ctx.shadowColor='#FFB800'; ctx.shadowBlur=18; ctx.fill(); ctx.shadowBlur=0;
+      } else {
+        const glow = ctx.createRadialGradient(sx,sy,0,sx,sy,sunSize*2.5);
+        glow.addColorStop(0,'rgba(60,90,140,0.25)'); glow.addColorStop(1,'rgba(60,90,140,0)');
+        ctx.beginPath(); ctx.arc(sx,sy,sunSize*2.5,0,2*Math.PI); ctx.fillStyle=glow; ctx.fill();
+        ctx.beginPath(); ctx.arc(sx,sy,sunSize,0,2*Math.PI);
+        ctx.fillStyle='#1a2a45'; ctx.strokeStyle='#3a5070'; ctx.lineWidth=1.5; ctx.fill(); ctx.stroke();
+      }
+    }
+
+    function drawHorizonRing(cx, cy, R) {
+      ctx.beginPath(); ctx.arc(cx,cy,R,0,2*Math.PI);
+      ctx.setLineDash([4,8]); ctx.strokeStyle='rgba(100,130,170,0.3)'; ctx.lineWidth=1; ctx.stroke(); ctx.setLineDash([]);
+    }
+
+    function drawDial(cx, cy, R) {
+      ctx.beginPath(); ctx.arc(cx,cy,R,0,2*Math.PI); ctx.strokeStyle='#cdd6e0'; ctx.lineWidth=2; ctx.stroke();
+      for (let h=0; h<24; h++) {
+        const isMain=(h%6===0), mi=R-(isMain?size*0.040:size*0.025);
+        const [x1,y1]=hourToXY(h,R,cx,cy), [x2,y2]=hourToXY(h,mi,cx,cy);
+        ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
+        ctx.lineWidth=isMain?3:1.5; ctx.strokeStyle=isMain?'#ffffff':'#8a97a8'; ctx.stroke();
+        const [nx,ny]=hourToXY(h,R-size*0.075,cx,cy);
+        ctx.fillStyle=isMain?'#ffffff':'#aeb9c7';
+        ctx.font=(isMain?'bold ':'')+Math.round(size*0.035)+'px system-ui, sans-serif';
+        ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(String(h),nx,ny);
+      }
+    }
+
+    function drawCenter(cx, cy) {
+      ctx.beginPath(); ctx.arc(cx,cy,4,0,2*Math.PI);
+      ctx.fillStyle='#ffffff'; ctx.shadowColor='#ffffff'; ctx.shadowBlur=6; ctx.fill(); ctx.shadowBlur=0;
+    }
+
+    // ============================================================
+    // Bahn-Cache: Sonnenbahn ändert sich nur einmal pro Tag spürbar,
+    // Mondbahn häufiger (wegen schnellem Auf/Untergang) → alle 30 Min.
+    // ============================================================
+    let cachedSunPath   = null;
+    let cachedMoonPath  = null;
+    let cachedDateKey   = '';
+    let cachedMoonTime  = 0;
+
+    function updatePathsIfNeeded(now) {
+      const key = now.toDateString();
+      if (key !== cachedDateKey) {
+        cachedSunPath = computeSunPath(now);
+        cachedDateKey = key;
+      }
+      if (now.getTime() - cachedMoonTime > 30 * 60 * 1000) {
+        cachedMoonPath = computeMoonPath(now);
+        cachedMoonTime = now.getTime();
+      }
+    }
+
+    // ============================================================
+    // Haupt-Zeichenschleife
+    // ============================================================
+    let size = 0;
+
+    function tick() {
+      const now     = new Date();
+      const sunData = getSunData(now);
+      const lstDeg  = getLST(now, LON);
+
+      // === Die eine Rotation — alle Himmelsobjekte teilen diesen Wert ===
+      const sunClockAngle = (sunData.h / 24) * 2 * Math.PI;
+      const rotation      = sunClockAngle - sunData.azimuthFromNorth;
+
+      const moonData = getMoonData(now, rotation);
+      const cx = size / 2, cy = size / 2;
+      const R  = (size / 2) * 0.90;
+
+      ctx.clearRect(0, 0, size, size);
+
+      drawStarField(cx, cy, R, rotation, lstDeg);  // 1. Sterne (ganz hinten)
+      drawConstellations(cx, cy, R, rotation, lstDeg); // 2. Sternbild-Linien
+
+      // 2b. Sonnen- und Mondbahn (Cache: einmal pro Tag neu berechnen)
+      updatePathsIfNeeded(now);
+      drawPath(cx, cy, R, cachedSunPath,  'rgba(255, 200, 80, 0.55)', Math.max(1.5, size * 0.0025));
+      drawPath(cx, cy, R, cachedMoonPath, 'rgba(180, 200, 230, 0.45)', Math.max(1.2, size * 0.0020));
+
+      // 2c. Zeit-Labels an den Mondbahn-Endpunkten (Sonne braucht keine,
+      //     da Endpunkte direkt auf den Uhrzeit-Marken liegen).
+      if (cachedMoonPath && cachedMoonPath.points.length >= 2) {
+        const firstPt = cachedMoonPath.points[0];
+        const lastPt  = cachedMoonPath.points[cachedMoonPath.points.length - 1];
+        drawPathEndpointLabel(cx, cy, R, firstPt,
+          '↑ ' + formatTime(cachedMoonPath.rise), 'rgba(200, 220, 245, 0.95)');
+        drawPathEndpointLabel(cx, cy, R, lastPt,
+          '↓ ' + formatTime(cachedMoonPath.set),  'rgba(200, 220, 245, 0.95)');
+      }
+
+      drawDial(cx, cy, R);                          // 2. Zifferblatt (über Sternen)
+      drawCompass(cx, cy, R, rotation);             // 3. N/E/S/W
+      drawHorizonRing(cx, cy, R);                   // 4. Horizont-Ring
+      drawSunHand(cx, cy, R, sunData);              // 5. Stundenzeiger-Linie
+      drawMinuteHand(cx, cy, R, now);               // 6. Minutenzeiger
+      drawMoon(cx, cy, R, moonData);                // 7. Mond
+      drawSun(cx, cy, R, sunData);                  // 8. Sonne
+      drawCenter(cx, cy);                           // 9. Mittelpunkt
+
+      const rotDeg = ((rotation * 180 / Math.PI) % 360 + 360) % 360;
+      debugEl.innerHTML =
+        `Zeit:            ${now.toLocaleTimeString('de-DE')}<br>` +
+        `Sonne:           ${sunData.altitudeDeg.toFixed(1)}°  ${sunData.isDay?'☀':'☾'}<br>` +
+        `Himmelsdrehung: ${rotDeg.toFixed(1)}°<br>` +
+        `Sterne:          ${starCatalog.length} (mag ≤ ${MAG_LIMIT}) + ${constellationData.length} Sternbilder<br>` +
+        `Standort:        ${LAT}°N ${LON}°O`;
+
+      setTimeout(tick, 1000);
+    }
+
+    function resize() {
+      const dpr = window.devicePixelRatio || 1;
+      size = Math.min(window.innerWidth, window.innerHeight);
+      canvas.width=size*dpr; canvas.height=size*dpr;
+      canvas.style.width=size+'px'; canvas.style.height=size+'px';
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
+
+    // === Start: erst Katalog laden, dann Animation ===
+    loadAllData().then(ok => {
+      if (ok) {
+        loadingEl.style.display = 'none';
+        canvas.style.display    = 'block';
+        tick();
+      }
+    });
+  </script>
+</body>
+</html>
