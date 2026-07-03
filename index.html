@@ -21,8 +21,30 @@
       line-height: 2;
     }
     #debug {
-      position: fixed; bottom: 12px; left: 12px;
-      color: #5a7090; font: 12px monospace; line-height: 1.6; pointer-events: none;
+      position: fixed; top: 12px; left: 12px;
+      color: #5a7090; font: 12px monospace; line-height: 1.8;
+    }
+    #debug input {
+      font: inherit;
+      color: #aeb9c7;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(174,185,199,0.25);
+      border-radius: 4px;
+      padding: 2px 4px;
+      color-scheme: dark;   /* lässt den nativen Kalender/Uhr-Picker dunkel erscheinen */
+      cursor: pointer;
+    }
+    #debug input:hover  { background: rgba(255,255,255,0.12); }
+    #debug input:focus  { outline: 1px solid rgba(174,185,199,0.5); }
+    #debug #locationLine { margin-top: 2px; }
+
+    /* Smartphone-Ansicht: Zeit-/Ortsangabe oben mittig statt oben links */
+    @media (max-width: 600px) {
+      #debug {
+        left: 50%;
+        transform: translateX(-50%);
+        text-align: center;
+      }
     }
 
     /* ============================================================
@@ -83,7 +105,11 @@
   <!-- Canvas ist zunächst unsichtbar — erscheint erst wenn Katalog geladen -->
   <canvas id="clock" style="display:none"></canvas>
   <div id="loading">⭐ Lade Sternkatalog + Sternbilder…<br><small>( einmalig, danach im Browser-Cache )</small></div>
-  <div id="debug"></div>
+  <div id="debug">
+    <input type="date" id="dateInput" title="Datum ändern" aria-label="Datum">
+    <input type="time" id="timeInput" title="Uhrzeit ändern" aria-label="Uhrzeit">
+    <div id="locationLine">Standort: 51.22°N 12.32°O</div>
+  </div>
 
   <!-- VORLÄUFIG: Zeitsteuerung zum Testen/Demonstrieren -->
   <div id="transport">
@@ -100,7 +126,8 @@
     const canvas    = document.getElementById('clock');
     const ctx       = canvas.getContext('2d');
     const loadingEl = document.getElementById('loading');
-    const debugEl   = document.getElementById('debug');
+    const dateInput = document.getElementById('dateInput');
+    const timeInput = document.getElementById('timeInput');
 
     const LAT = 51.22;
     const LON = 12.32;
@@ -182,6 +209,38 @@
         el.textContent = (timeSpeed < 0 ? '◀ ' : '') + Math.abs(timeSpeed) + '×';
       }
     }
+
+    // ============================================================
+    // Datum/Uhrzeit manuell setzen (Klick auf Datum/Uhrzeit öffnet den
+    // nativen Browser-Picker). Springt die virtuelle Zeit auf den gewählten
+    // Zeitpunkt — wie ein "Seek", das aktuelle Tempo (Zeitraffer) bleibt
+    // dabei unangetastet, anders als beim NOW-Knopf.
+    //
+    // Die Felder werden nur synchronisiert, wenn sie nicht gerade fokussiert
+    // sind — sonst würde der laufende Uhr-Tick (10×/Sekunde) die Eingabe
+    // mitten in der Bedienung des Pickers überschreiben.
+    // ============================================================
+    function pad2(n) { return String(n).padStart(2, '0'); }
+    function toDateInputValue(d) { return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
+    function toTimeInputValue(d) { return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
+
+    function applyDateTimeInputs() {
+      const [y, m, day] = dateInput.value.split('-').map(Number);
+      const [hh, mm]    = timeInput.value.split(':').map(Number);
+      if (!y || !m || !day || isNaN(hh) || isNaN(mm)) return;  // unvollständige Eingabe ignorieren
+
+      virtualAnchorSim  = new Date(y, m - 1, day, hh, mm, 0, 0);
+      virtualAnchorReal = Date.now();
+    }
+
+    function syncDateTimeInputs(now) {
+      if (document.activeElement === dateInput || document.activeElement === timeInput) return;
+      dateInput.value = toDateInputValue(now);
+      timeInput.value = toTimeInputValue(now);
+    }
+
+    dateInput.addEventListener('change', applyDateTimeInputs);
+    timeInput.addEventListener('change', applyDateTimeInputs);
 
     // ============================================================
     // Basis-Hilfsfunktionen (unverändert aus Schritt 4)
@@ -1233,9 +1292,7 @@
       drawSun(cx, cy, R_sky, sunData);                         // 11. Sonne
       drawCenter(cx, cy);                                      // 12. Mittelpunkt
 
-      debugEl.innerHTML =
-        `${now.toLocaleDateString('de-DE')}  ${now.toLocaleTimeString('de-DE')}<br>` +
-        `Standort: ${LAT}°N ${LON}°O`;
+      syncDateTimeInputs(now);
 
       setTimeout(tick, 100);   // kürzeres Intervall, läuft flüssig auch im Zeitraffer
     }

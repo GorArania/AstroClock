@@ -162,6 +162,39 @@ Iterations-/Schritt-Budget zurückfallen.
 
 ---
 
+## Datum/Uhrzeit manuell einstellbar (Nutzer-Feature)
+
+Der Nutzer kann Datum und Uhrzeit direkt anklicken und ändern — dafür werden
+bewusst NATIVE Browser-Eingabefelder verwendet (`<input type="date">` /
+`<input type="time">`, `#dateInput` / `#timeInput`), keine externe
+Picker-Bibliothek. Klick öffnet automatisch den system-/browsereigenen
+Kalender- bzw. Uhrzeit-Picker (auf Desktop wie auf dem Smartphone jeweils
+mit der nativen UI) — passt zum Projektgrundsatz "keine unzuverlässigen
+externen Abhängigkeiten" (vgl. Planeten-Eigenimplementierung,
+lokale JSON-Dateien statt CDN).
+
+**Verhalten:** Eine Änderung an einem der beiden Felder (`change`-Event)
+setzt `virtualAnchorSim`/`virtualAnchorReal` neu (siehe
+`applyDateTimeInputs`) — die virtuelle Zeit "springt" auf den gewählten
+Zeitpunkt, das aktuell eingestellte Zeitraffer-Tempo bleibt dabei
+UNVERÄNDERT (anders als der NOW-Knopf, der zusätzlich das Tempo
+zurücksetzt). Die Felder werden pro Tick mit der laufenden virtuellen Zeit
+synchronisiert (`syncDateTimeInputs`), aber NUR wenn keines der beiden
+gerade fokussiert ist — sonst würde der 10×/Sekunde-Tick die Eingabe mitten
+in der Bedienung des Pickers überschreiben. Bitte diese Fokus-Prüfung bei
+Änderungen an der Sync-Logik beibehalten.
+
+**Layout:** Die Anzeige (`#debug`, enthält Datum/Uhrzeit-Inputs + Standort-
+Zeile) sitzt oben links (`top/left`), auf Schmalbildschirmen
+(`max-width: 600px`) oben mittig zentriert.
+
+**Standort ist aktuell noch NICHT editierbar** — nur die Zeit. Die
+Standort-Zeile zeigt weiterhin die festen LAT/LON-Werte (Zwenkau) als reinen
+Text. Editierbarkeit des Standorts ist als nächster Schritt geplant (siehe
+"Bekannte offene Punkte").
+
+---
+
 ## NICHT ÄNDERN OHNE RÜCKFRAGE: Mond-Auf-/Untergangszeiten-Suche
 
 **Bekannter, bereits gefixter Bug:** `SunCalc.getMoonTimes(heute)` liefert
@@ -303,9 +336,12 @@ anlegen.
 
 ## Bekannte offene Punkte
 
-1. Weitere Änderungsideen — werden zu Beginn dieser Sitzung vom Nutzer
+1. **Standort manuell editierbar machen** — Datum/Uhrzeit sind bereits
+   klickbar änderbar (native Picker, siehe oben), der Standort (LAT/LON)
+   ist aktuell noch reiner Text. Nächster geplanter Schritt.
+2. Weitere Änderungsideen — werden zu Beginn dieser Sitzung vom Nutzer
    ergänzt, hier ggf. noch nicht erfasst
-2. Nach Abschluss dieser Sitzung: Rückkehr zum Linux-Mint-PC-Workflow
+3. Nach Abschluss dieser Sitzung: Rückkehr zum Linux-Mint-PC-Workflow
    (`/home/goraran/prog/AstroClock`, GitHub-Repo `GorArania/AstroClock`) —
    Änderungen von hier müssen dorthin zurücksynchronisiert werden (git
    pull/push oder manuelles Kopieren), damit GitHub Pages und der lokale
