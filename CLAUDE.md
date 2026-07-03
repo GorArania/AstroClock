@@ -207,12 +207,64 @@ sinnvolle Offline-Alternative gibt.
 
 `LAT`/`LON` sind seit dieser Änderung `let` statt `const` (waren vorher
 fest). Eine Standort-Änderung setzt `cachedDateKey`/`cachedMoonTime` zurück
-(`invalidateLocationCaches`), damit Sonnen-/Mond-Auf-/Untergang sofort mit
-den neuen Koordinaten neu berechnet werden — der Tages-Cache reagiert sonst
-nur auf Datumswechsel, nicht auf Standortwechsel.
+(`onLocationChanged`, früher `invalidateLocationCaches`), damit Sonnen-/
+Mond-Auf-/Untergang sofort mit den neuen Koordinaten neu berechnet werden —
+der Tages-Cache reagiert sonst nur auf Datumswechsel, nicht auf
+Standortwechsel.
 
 Automatische Standort-Ermittlung per GPS/Sensor bleibt bewusst außen vor
 (siehe Scope-Grenze, Phase 2/Android).
+
+---
+
+## Zeitzone folgt dem Standort (WICHTIG für das Kernkonzept)
+
+Alle angezeigten Uhrzeiten (Sonnenzeiger-Winkel, Minutenzeiger,
+Auf-/Untergangs-Labels, Datum/Uhrzeit-Eingabefelder) laufen in der
+**bürgerlichen Zeit des GEWÄHLTEN ORTES**, nicht des Geräts. Nur so gilt
+das Kernversprechen "Sonne = Ortszeit auf der Uhr" auch, wenn ein Ort in
+einer anderen Zeitzone gewählt wird (z. B. Dakar vom deutschen Browser aus).
+
+**Umsetzung (zweistufig, bewusst so gewählt):**
+1. **Lat/Lon → IANA-Zeitzonenname:** `tz-lookup.js` (lokale Datei im
+   Projektordner, ~72 KB, kein Netzwerkzugriff) — `tzlookup(LAT, LON)`
+   liefert z. B. `"Africa/Dakar"`, auf Ozeanen `"Etc/GMT+X"`.
+2. **Zeitpunkt → Ortszeit:** Browser-eigene `Intl.DateTimeFormat` mit
+   `timeZone` (inkl. korrekter Sommerzeit- und Sonderregeln wie Indien
+   +5:30) — keine eigene Offset-Datenbank nötig.
+
+Zentrale Funktionen: `updateTimezone` (bei jedem Standortwechsel via
+`onLocationChanged`), `getLocalParts` (Zeitpunkt → Orts-Wandzeit-Teile,
+einmal pro Frame in `tick()` berechnet und durchgereicht),
+`wallTimeToDate` (Umkehrung für die Datum/Uhrzeit-Eingabe, iterativ über
+den Offset, konvergiert an Sommerzeitgrenzen in 2 Schritten). SunCalc,
+Sternzeit (`getLST`) und die ganze Himmelsmathematik arbeiten weiterhin mit
+absoluten Zeitpunkten — dort hat sich NICHTS geändert. Der Tages-Cache-
+Schlüssel in `updateRiseSetIfNeeded` nutzt das ORTS-Datum.
+
+**Verifiziert:** Dakar (UTC+0) im Juli — Sonne kulminiert ~81° hoch auf der
+NORD-Seite (astronomisch korrekt, Deklination 23° > Breite 14,7°), alle
+Zeiten in Dakar-Ortszeit. Das war der Anlass für diese Änderung: vorher
+liefen die Uhrzeiten in Geräte-Zeitzone, der Himmel aber am gewählten Ort.
+
+---
+
+## Präzession & Südhalbkugel-Mond (Genauigkeits-Fixes)
+
+**Präzession:** Sternkatalog + Sternbild-Linien liegen in J2000-Koordinaten
+vor; ohne Korrektur wären die Sterne 2026 um ~0,36° verschoben (~50,3″/Jahr
+wachsend). `updatePrecession` (Meeus Kap. 21, Gl. 21.2–21.4, numerisch
+gegen Meeus-Beispiel 21.b verifiziert: 0,00″ Abweichung) rechnet die
+Koordinaten auf die aktuelle Epoche um. Rohdaten bleiben als `ra0_h`/
+`dec0_deg` bzw. `segments` erhalten; präzessiert wird in `ra_h`/`dec_deg`
+bzw. `segmentsP`. Neuberechnung nur bei >30 Tagen Abstand der virtuellen
+Zeit zur letzten Epoche (funktioniert daher auch im Zeitraffer und bei
+Datums-Sprüngen über Jahrzehnte, vorwärts wie rückwärts).
+
+**Mondphasen-Spiegelung:** Auf der Südhalbkugel (`LAT < 0`) wird die
+Mondphasen-Darstellung horizontal gespiegelt (zunehmend = links beleuchtet)
+— `drawMoonPhase(..., mirrorX)`. Bewusst nur binäre N/S-Spiegelung, keine
+kontinuierliche Drehung nach parallaktischem Winkel (stilisierte Anzeige).
 
 ---
 
@@ -257,6 +309,11 @@ Horizont steht oder nicht). Bitte diese Logik nicht durch eine simplere
   "Astronomical Algorithms" Kap. 33 (Kepler-Gleichung per Newton-Raphson,
   Genauigkeit ~1-2°). KEINE externe Bibliothek (astronomy-engine wurde
   ausprobiert, CDN/API funktionierte nicht zuverlässig, wurde verworfen).
+- **Zeitzonen-Zuordnung** — `tz-lookup.js` (lokale Datei, ~72 KB, muss wie
+  die JSON-Dateien im selben Ordner wie `index.html` liegen). Quelle:
+  https://github.com/darkskyapp/tz-lookup (npm `tz-lookup@6.1.25`).
+  Nur die Lat/Lon→Zeitzonenname-Zuordnung; Offsets/Sommerzeit macht der
+  Browser (Intl API). Siehe Abschnitt "Zeitzone folgt dem Standort".
 
 ---
 

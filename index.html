@@ -3,8 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AstroClock – Schritt 8: Klassische Zeiger</title>
+  <title>AstroClock</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js"></script>
+  <!-- Lokale Zeitzonen-Zuordnung Lat/Lon → IANA-Zeitzonenname (tz-lookup, lokal
+       eingebunden gemäß Projektgrundsatz). Die eigentlichen Offset-/Sommerzeit-
+       regeln kommen dann vom Browser selbst (Intl API) — keine weitere Datenquelle. -->
+  <script src="tz-lookup.js"></script>
   <style>
     html, body {
       margin: 0; padding: 0; height: 100%;
@@ -142,6 +146,59 @@
     locationInput.value = formatLocation(LAT, LON);
 
     // ============================================================
+    // ZEITZONE DES STANDORTS — alle angezeigten Uhrzeiten (Sonnenzeiger,
+    // Minutenzeiger, Auf-/Untergangs-Labels, Datum/Uhrzeit-Felder) laufen
+    // in der bürgerlichen Zeit des GEWÄHLTEN ORTES, nicht des Geräts.
+    // Nur so gilt das Kernversprechen "Sonne = Ortszeit auf der Uhr" auch,
+    // wenn der Nutzer einen Ort in einer anderen Zeitzone wählt.
+    //
+    // Zuordnung Lat/Lon → Zeitzonenname: tz-lookup (lokale Datei).
+    // Umrechnung Zeitpunkt → Ortszeit: Intl API des Browsers (inkl. korrekter
+    // Sommerzeit- und Sonderregeln wie Indien +5:30). SunCalc & Sternzeit
+    // arbeiten intern weiter mit absoluten Zeitpunkten — dort ändert sich nichts.
+    // ============================================================
+    let TIMEZONE    = null;
+    let tzFormatter = null;
+
+    function updateTimezone() {
+      try {
+        TIMEZONE = tzlookup(LAT, LON);
+      } catch (e) {
+        // Fallback: Zeitzone des Geräts (z.B. wenn tz-lookup.js fehlt)
+        TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      }
+      tzFormatter = new Intl.DateTimeFormat('en-CA', {
+        timeZone: TIMEZONE, hourCycle: 'h23',
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+      });
+    }
+    updateTimezone();
+
+    // Zerlegt einen absoluten Zeitpunkt in die Ortszeit-Bestandteile.
+    function getLocalParts(date) {
+      const p = {};
+      for (const part of tzFormatter.formatToParts(date)) {
+        if (part.type !== 'literal') p[part.type] = +part.value;
+      }
+      return { y: p.year, mo: p.month, d: p.day, h: p.hour, mi: p.minute, s: p.second };
+    }
+
+    // Umkehrung: Orts-Wandzeit → absoluter Zeitpunkt. Iterativ über den
+    // Offset gelöst (konvergiert in 1 Schritt, an Sommerzeit-Grenzen in 2).
+    function wallTimeToDate(y, mo, d, hh, mi) {
+      let guessMs = Date.UTC(y, mo - 1, d, hh, mi, 0);
+      const wantMs = guessMs;
+      for (let i = 0; i < 3; i++) {
+        const p = getLocalParts(new Date(guessMs));
+        const haveMs = Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi, p.s);
+        if (haveMs === wantMs) break;
+        guessMs += wantMs - haveMs;
+      }
+      return new Date(guessMs);
+    }
+
+    // ============================================================
     // VORLÄUFIG: Zeitsteuerung zum Testen/Demonstrieren
     // (Geschwindigkeit ändern, vor- und rückwärts, zurück auf Echtzeit)
     //
@@ -230,22 +287,23 @@
     // mitten in der Bedienung des Pickers überschreiben.
     // ============================================================
     function pad2(n) { return String(n).padStart(2, '0'); }
-    function toDateInputValue(d) { return `${d.getFullYear()}-${pad2(d.getMonth()+1)}-${pad2(d.getDate())}`; }
-    function toTimeInputValue(d) { return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; }
+    function toDateInputValue(local) { return `${local.y}-${pad2(local.mo)}-${pad2(local.d)}`; }
+    function toTimeInputValue(local) { return `${pad2(local.h)}:${pad2(local.mi)}`; }
 
     function applyDateTimeInputs() {
       const [y, m, day] = dateInput.value.split('-').map(Number);
       const [hh, mm]    = timeInput.value.split(':').map(Number);
       if (!y || !m || !day || isNaN(hh) || isNaN(mm)) return;  // unvollständige Eingabe ignorieren
 
-      virtualAnchorSim  = new Date(y, m - 1, day, hh, mm, 0, 0);
+      // Eingabe ist Orts-Wandzeit (Zeitzone des gewählten Standorts)
+      virtualAnchorSim  = wallTimeToDate(y, m, day, hh, mm);
       virtualAnchorReal = Date.now();
     }
 
-    function syncDateTimeInputs(now) {
+    function syncDateTimeInputs(local) {
       if (document.activeElement === dateInput || document.activeElement === timeInput) return;
-      dateInput.value = toDateInputValue(now);
-      timeInput.value = toTimeInputValue(now);
+      dateInput.value = toDateInputValue(local);
+      timeInput.value = toTimeInputValue(local);
     }
 
     dateInput.addEventListener('change', applyDateTimeInputs);
@@ -287,10 +345,11 @@
       return { lat: parseFloat(results[0].lat), lon: parseFloat(results[0].lon) };
     }
 
-    // Sonnen-/Mond-Auf-/Untergang hängen vom Standort ab — der Tages-Cache
-    // (siehe updateRiseSetIfNeeded) merkt eine Standort-Änderung sonst nicht,
-    // weil er nur auf das Datum reagiert. Erzwingt daher eine Neuberechnung.
-    function invalidateLocationCaches() {
+    // Nach jedem Standortwechsel: Zeitzone neu bestimmen und die Caches
+    // für Sonnen-/Mond-Auf-/Untergang leeren — der Tages-Cache (siehe
+    // updateRiseSetIfNeeded) reagiert sonst nur auf Datumswechsel.
+    function onLocationChanged() {
+      updateTimezone();
       cachedDateKey  = '';
       cachedMoonTime = 0;
     }
@@ -306,7 +365,7 @@
       if (coords) {
         LAT = coords.lat; LON = coords.lon;
         locationInput.value = formatLocation(LAT, LON);
-        invalidateLocationCaches();
+        onLocationChanged();
         return;
       }
 
@@ -316,7 +375,7 @@
         const result = await geocodePlace(text);
         LAT = result.lat; LON = result.lon;
         locationInput.value = formatLocation(LAT, LON);
-        invalidateLocationCaches();
+        onLocationChanged();
       } catch (err) {
         locationInput.value = 'Ort nicht gefunden';
         setTimeout(() => { locationInput.value = formatLocation(LAT, LON); }, 2500);
@@ -518,7 +577,9 @@
             const bv      = f.properties.bv;
             const glowRGB = bvToGlowColor(bv);
             return {
-              ra_h:     ra_deg / 15,
+              ra0_h:    ra_deg / 15,   // J2000-Rohkoordinaten (Basis für Präzession)
+              dec0_deg: dec_deg,
+              ra_h:     ra_deg / 15,   // präzessierte Koordinaten (von updatePrecession gepflegt)
               dec_deg:  dec_deg,
               mag:      mag,
               color:    bvToColor(bv),
@@ -570,6 +631,52 @@
         loadConstellations(),
       ]);
       return starsOk;  // Sterne sind Pflicht, Sternbilder optional
+    }
+
+    // ============================================================
+    // PRÄZESSION — Sternkatalog & Sternbild-Linien liegen in J2000-
+    // Koordinaten vor, die Erdachse wandert aber (~50,3″/Jahr). Ohne
+    // Korrektur stünden die Sterne 2026 bereits ~0,36° verschoben
+    // (wachsend ~0,014°/Jahr). Formeln: Meeus Kap. 21 (Gl. 21.2–21.4,
+    // numerisch gegen Meeus' Beispiel 21.b verifiziert).
+    //
+    // Neuberechnung nur, wenn die virtuelle Zeit >30 Tage von der
+    // letzten Präzessions-Epoche entfernt ist — die Drift dazwischen
+    // (<0,005°) liegt weit unter der Anzeigegenauigkeit. Funktioniert
+    // dadurch auch im schnellen Zeitraffer (vorwärts wie rückwärts)
+    // und bei Datums-Sprüngen über Jahrzehnte.
+    // ============================================================
+    let precessEpochMs = null;
+
+    function precessJ2000ToDate(raDeg, decDeg, zetaR, zR, thetaR) {
+      const a0 = toR(raDeg), d0 = toR(decDeg);
+      const A = Math.cos(d0) * Math.sin(a0 + zetaR);
+      const B = Math.cos(thetaR)*Math.cos(d0)*Math.cos(a0 + zetaR) - Math.sin(thetaR)*Math.sin(d0);
+      const C = Math.sin(thetaR)*Math.cos(d0)*Math.cos(a0 + zetaR) + Math.cos(thetaR)*Math.sin(d0);
+      return { raDeg: n360(toD(zR + Math.atan2(A, B))), decDeg: toD(Math.asin(C)) };
+    }
+
+    function updatePrecession(now) {
+      if (precessEpochMs !== null && Math.abs(now.getTime() - precessEpochMs) < 30 * 86400000) return;
+      precessEpochMs = now.getTime();
+
+      const T = getT(now);
+      const arcsecR = Math.PI / (180 * 3600);
+      const zetaR  = (2306.2181*T + 0.30188*T*T + 0.017998*T*T*T) * arcsecR;
+      const zR     = (2306.2181*T + 1.09468*T*T + 0.018203*T*T*T) * arcsecR;
+      const thetaR = (2004.3109*T - 0.42665*T*T - 0.041833*T*T*T) * arcsecR;
+
+      for (const s of starCatalog) {
+        const p = precessJ2000ToDate(s.ra0_h * 15, s.dec0_deg, zetaR, zR, thetaR);
+        s.ra_h    = p.raDeg / 15;
+        s.dec_deg = p.decDeg;
+      }
+      for (const c of constellationData) {
+        c.segmentsP = c.segments.map(seg => seg.map(pt => {
+          const p = precessJ2000ToDate(((pt[0] % 360) + 360) % 360, pt[1], zetaR, zR, thetaR);
+          return [p.raDeg, p.decDeg];
+        }));
+      }
     }
 
     // ============================================================
@@ -840,9 +947,8 @@
     }
 
     function formatTime(date) {
-      const h = String(date.getHours()).padStart(2, '0');
-      const m = String(date.getMinutes()).padStart(2, '0');
-      return `${h}:${m}`;
+      const p = getLocalParts(date);   // Ortszeit des gewählten Standorts
+      return `${pad2(p.h)}:${pad2(p.mi)}`;
     }
 
     // ============================================================
@@ -862,11 +968,11 @@
       ctx.lineCap     = 'round';
 
       for (const c of constellationData) {
-        for (const segment of c.segments) {
+        // Präzessierte Segmente bevorzugen (von updatePrecession gepflegt)
+        for (const segment of (c.segmentsP || c.segments)) {
           // Ein Segment = Folge von [RA_deg, Dec_deg] Punkten, die verbunden werden
           ctx.beginPath();
-          let penDown     = false;  // wurde ctx.moveTo schon gesetzt?
-          let lastAbove   = false;
+          let penDown = false;  // wurde ctx.moveTo schon gesetzt?
 
           for (const pt of segment) {
             const ra_h    = ((pt[0] % 360) + 360) % 360 / 15;
@@ -874,8 +980,7 @@
 
             if (altDeg < 0) {
               // Dieser Punkt ist unter dem Horizont → Stift abheben
-              penDown   = false;
-              lastAbove = false;
+              penDown = false;
               continue;
             }
 
@@ -887,7 +992,6 @@
             } else {
               ctx.lineTo(sx, sy);
             }
-            lastAbove = true;
           }
           ctx.stroke();
         }
@@ -998,7 +1102,7 @@
       console.log('Planeten:', planetCache.map(p => `${p.name} ${p.altDeg.toFixed(1)}°`).join(', '));
     }
 
-    function drawPlanets(cx, cy, R, rotation, sunAltDeg) {
+    function drawPlanets(cx, cy, R, rotation, sunAltDeg, compassPositions) {
       const limitMag = getLimitMag(sunAltDeg);
 
       for (const p of planetCache) {
@@ -1024,10 +1128,23 @@
         ctx.fillStyle = p.color; ctx.shadowColor = p.color; ctx.shadowBlur = pr * 4;
         ctx.fill(); ctx.shadowBlur = 0;
 
-        // Label mit dunklem Halo
-        const lx = px + pr * 1.8 + 2;
-        ctx.font = Math.round(size * 0.021) + 'px system-ui, sans-serif';
-        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        // Label mit dunklem Halo — normal rechts vom Planeten. Würde es
+        // einen Kompass-Buchstaben überschreiben, wechselt der Text auf die
+        // linke Seite (der Planeten-Punkt bleibt natürlich, wo er ist).
+        const fontSize = Math.round(size * 0.021);
+        ctx.font = fontSize + 'px system-ui, sans-serif';
+        const tw    = ctx.measureText(p.name).width;
+        const halfH = fontSize * 0.4;
+        const pad   = size * 0.004;
+        const collides = (textCenterX) => compassPositions && compassPositions.some(c =>
+          Math.abs(textCenterX - c.x) < tw / 2 + c.halfW + pad &&
+          Math.abs(py - c.y)          < halfH + c.halfH + pad);
+
+        let lx = px + pr * 1.8 + 2, align = 'left';
+        if (collides(lx + tw / 2) && !collides(px - pr * 1.8 - 2 - tw / 2)) {
+          lx = px - pr * 1.8 - 2; align = 'right';
+        }
+        ctx.textAlign = align; ctx.textBaseline = 'middle';
         ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(11,16,32,0.90)';
         ctx.strokeText(p.name, lx, py);
         ctx.fillStyle = p.color; ctx.fillText(p.name, lx, py);
@@ -1083,10 +1200,11 @@
     // ============================================================
     // Sonnen- und Mond-Daten (unverändert aus Schritt 4)
     // ============================================================
-    function getSunData(now) {
+    function getSunData(now, local) {
       const pos = SunCalc.getPosition(now, LAT, LON);
       const altitudeDeg = pos.altitude * (180 / Math.PI);
-      const h = now.getHours() + now.getMinutes() / 60 + now.getSeconds() / 3600;
+      // Uhrzeit-Winkel aus der ORTSZEIT des Standorts (nicht des Geräts)
+      const h = local.h + local.mi / 60 + local.s / 3600 + now.getMilliseconds() / 3600000;
       const azimuthFromNorth = normalizeAngle(pos.azimuth + Math.PI);
       return { h, altitudeDeg, isDay: altitudeDeg > 0, azimuthFromNorth };
     }
@@ -1109,9 +1227,11 @@
     // Alle Zeichenfunktionen (unverändert aus Schritt 3/4)
     // ============================================================
 
-    function drawMoonPhase(cx, cy, r, phase) {
+    function drawMoonPhase(cx, cy, r, phase, mirrorX) {
       const dark = '#1a2840', lit = '#dde8f5';
       ctx.save();
+      // Südhalbkugel: Mond erscheint horizontal gespiegelt (zunehmend = links beleuchtet)
+      if (mirrorX) { ctx.translate(cx, cy); ctx.scale(-1, 1); ctx.translate(-cx, -cy); }
       ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2*Math.PI); ctx.clip();
       ctx.fillStyle = dark; ctx.fillRect(cx-r-1, cy-r-1, 2*r+2, 2*r+2);
       const waxing = phase <= 0.5;
@@ -1143,7 +1263,7 @@
       const glow = ctx.createRadialGradient(mx,my,0,mx,my,moonSize*3);
       glow.addColorStop(0,'rgba(180,205,235,0.22)'); glow.addColorStop(1,'rgba(180,205,235,0)');
       ctx.beginPath(); ctx.arc(mx,my,moonSize*3,0,2*Math.PI); ctx.fillStyle=glow; ctx.fill();
-      drawMoonPhase(mx, my, moonSize, phase);
+      drawMoonPhase(mx, my, moonSize, phase, LAT < 0);
       ctx.beginPath(); ctx.arc(mx,my,moonSize,0,2*Math.PI);
       ctx.strokeStyle='rgba(150,180,220,0.55)'; ctx.lineWidth=1; ctx.stroke();
       ctx.globalAlpha=1.0;
@@ -1204,8 +1324,9 @@
       drawClassicHand(cx, cy, phi, R * 0.85, R * 0.046, R * 0.09, HAND_FILL, HAND_STROKE);
     }
 
-    function drawMinuteHand(cx, cy, R, now) {
-      const phi = ((now.getMinutes() + now.getSeconds() / 60) / 60) * 2 * Math.PI;
+    function drawMinuteHand(cx, cy, R, local) {
+      // Ortszeit-Minuten (relevant bei Zeitzonen mit :30/:45-Versatz, z.B. Indien)
+      const phi = ((local.mi + local.s / 60) / 60) * 2 * Math.PI;
       drawClassicHand(cx, cy, phi, R * 0.97, R * 0.032, R * 0.08, HAND_FILL, HAND_STROKE);
     }
 
@@ -1281,8 +1402,10 @@
     let cachedDateKey     = '';
     let cachedMoonTime    = 0;
 
-    function updateRiseSetIfNeeded(now) {
-      const key = now.toDateString();
+    function updateRiseSetIfNeeded(now, local) {
+      // Tages-Schlüssel aus der ORTSZEIT — der Kalendertag des Standorts,
+      // nicht der des Geräts (sonst wechseln die Zeiten zum falschen Moment)
+      const key = `${local.y}-${local.mo}-${local.d}`;
       if (key !== cachedDateKey) {
         cachedSunRiseSet = computeSunRiseSet(now);
         cachedDateKey    = key;
@@ -1299,8 +1422,9 @@
     let size = 0;
 
     function tick() {
-      const now     = getVirtualNow();   // VORLÄUFIG: virtuelle statt echte Zeit
-      const sunData = getSunData(now);
+      const now     = getVirtualNow();       // virtuelle Zeit (Zeitraffer-Feature)
+      const local   = getLocalParts(now);    // Ortszeit des gewählten Standorts
+      const sunData = getSunData(now, local);
       const lstDeg  = getLST(now, LON);
 
       // === Die eine Rotation — alle Himmelsobjekte teilen diesen Wert ===
@@ -1315,15 +1439,20 @@
       const R_sky   = (size / 2) * 0.81;
       const R_outer = (size / 2) * 0.94;
 
+      // Kompass-Positionen früh berechnen — sie dienen auch den Planeten-
+      // Labels und den Auf-/Untergangs-Labels als Kollisions-Referenz.
+      const compassPositions = computeCompassLabelPositions(cx, cy, R_sky, rotation);
+
       ctx.clearRect(0, 0, size, size);
       drawSkyBackground(cx, cy, R_sky, sunData);                // 0. Naturalistischer Himmel
 
+      updatePrecession(now);                                    // J2000 → aktuelle Epoche (gecacht)
       drawStarField(cx, cy, R_sky, rotation, lstDeg, sunData.altitudeDeg);          // 1. Sterne
       drawConstellations(cx, cy, R_sky, rotation, lstDeg, sunData.altitudeDeg);     // 2. Sternbild-Linien
 
       // 3. Planeten (über Sternen, unter Mond/Sonne)
       computePlanetPositions(now, lstDeg);
-      drawPlanets(cx, cy, R_sky, rotation, sunData.altitudeDeg);
+      drawPlanets(cx, cy, R_sky, rotation, sunData.altitudeDeg, compassPositions);
 
       // 4. Auf-/Untergangs-Zeit-Labels für Sonne und Mond, an der jeweils
       //    echten Himmelsrichtung — Position pendelt mit der aktuellen
@@ -1331,7 +1460,7 @@
       //    Sonne und Mond (fast) am selben Azimut auf-/untergehen — der
       //    Punkt bleibt dann bewusst exakt gleich, aber die Texte werden
       //    bei Bedarf auseinandergeschoben (siehe resolveLabelCollisions).
-      updateRiseSetIfNeeded(now);
+      updateRiseSetIfNeeded(now, local);
       const sunColor  = 'rgba(255, 210, 130, 0.95)';
       const moonColor = 'rgba(200, 220, 245, 0.95)';
       const riseSetLabels = [];
@@ -1355,11 +1484,10 @@
           text: '↓ ' + formatTime(cachedMoonRiseSet.set), color: moonColor
         });
       }
-      const riseSetFontSize = size * 0.020;
+      const riseSetFontSize = Math.round(size * 0.020);  // identisch zu RISE_SET_FONT
       ctx.font = RISE_SET_FONT();
       for (const l of riseSetLabels) l.halfW = ctx.measureText(l.text).width / 2;
       const labelMinSeparation = Math.max(...riseSetLabels.map(l => l.halfW * 2), 0) + size * 0.015;
-      const compassPositions = computeCompassLabelPositions(cx, cy, R_sky, rotation);
 
       // Mehrere Runden abwechselnd auflösen: Das Ausweichen vor dem Kompass
       // kann ein Label in den Weg eines anderen Zeit-Labels schieben (und
@@ -1375,12 +1503,12 @@
       drawCompass(compassPositions);                           // 6. N/E/S/W (innen)
       drawHorizonRing(cx, cy, R_sky);                          // 7. Horizont-Ring
       drawSunHand(cx, cy, R_sky, sunData);                     // 8. Stundenzeiger
-      drawMinuteHand(cx, cy, R_sky, now);                      // 9. Minutenzeiger
+      drawMinuteHand(cx, cy, R_sky, local);                    // 9. Minutenzeiger
       drawMoon(cx, cy, R_sky, moonData);                       // 10. Mond
       drawSun(cx, cy, R_sky, sunData);                         // 11. Sonne
       drawCenter(cx, cy);                                      // 12. Mittelpunkt
 
-      syncDateTimeInputs(now);
+      syncDateTimeInputs(local);
 
       setTimeout(tick, 100);   // kürzeres Intervall, läuft flüssig auch im Zeitraffer
     }
@@ -1402,6 +1530,10 @@
         loadingEl.style.display = 'none';
         canvas.style.display    = 'block';
         tick();
+      } else {
+        loadingEl.innerHTML =
+          '⚠️ Sternkatalog konnte nicht geladen werden.<br>' +
+          '<small>stars.6.json fehlt oder ist nicht erreichbar — bitte Seite neu laden.</small>';
       }
     });
   </script>
