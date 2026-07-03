@@ -43,6 +43,15 @@
     #debug #locationLine { margin-top: 2px; }
     #locationInput { width: 170px; cursor: text; }
 
+    /* Jahr steht im separaten #yearInput (nötig für Jahre v. Chr., die ein
+       date-Input nicht darstellen kann) — im Datumsfeld daher ausblenden.
+       Nur Chromium-Browser; anderswo erscheint das Jahr doppelt (harmlos,
+       das Jahr-Feld hat Vorrang). */
+    input[type="date"]::-webkit-datetime-edit-year-field { display: none; }
+    #yearInput { width: 5.5ch; cursor: text; appearance: textfield; -moz-appearance: textfield; }
+    #yearInput::-webkit-inner-spin-button,
+    #yearInput::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
     /* Smartphone-Ansicht: Zeit-/Ortsangabe oben mittig statt oben links */
     @media (max-width: 600px) {
       #debug {
@@ -111,8 +120,11 @@
   <canvas id="clock" style="display:none"></canvas>
   <div id="loading">⭐ Lade Sternkatalog + Sternbilder…<br><small>( einmalig, danach im Browser-Cache )</small></div>
   <div id="debug">
-    <input type="date" id="dateInput" title="Datum ändern" aria-label="Datum"
+    <input type="date" id="dateInput" title="Tag/Monat ändern" aria-label="Datum"
            min="0001-01-01" max="9999-12-31">
+    <input type="number" id="yearInput" min="-9999" max="9999" step="1"
+           title="Jahr — astronomische Zählung: 0 = 1 v. Chr., −499 = 500 v. Chr."
+           aria-label="Jahr">
     <input type="time" id="timeInput" title="Uhrzeit ändern" aria-label="Uhrzeit">
     <div id="locationLine">
       Standort: <input type="text" id="locationInput"
@@ -137,6 +149,7 @@
     const ctx          = canvas.getContext('2d');
     const loadingEl    = document.getElementById('loading');
     const dateInput    = document.getElementById('dateInput');
+    const yearInput    = document.getElementById('yearInput');
     const timeInput    = document.getElementById('timeInput');
     const locationInput = document.getElementById('locationInput');
 
@@ -169,7 +182,7 @@
         TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
       }
       tzFormatter = new Intl.DateTimeFormat('en-CA', {
-        timeZone: TIMEZONE, hourCycle: 'h23',
+        timeZone: TIMEZONE, hourCycle: 'h23', era: 'short',
         year: 'numeric', month: '2-digit', day: '2-digit',
         hour: '2-digit', minute: '2-digit', second: '2-digit',
       });
@@ -177,12 +190,18 @@
     updateTimezone();
 
     // Zerlegt einen absoluten Zeitpunkt in die Ortszeit-Bestandteile.
+    // Jahre VOR Christus: Intl liefert year="563" + era="BC" — OHNE die
+    // era-Option wäre das von 563 n.Chr. nicht unterscheidbar! Wir rechnen
+    // in astronomischer Jahreszählung: 0 = 1 v.Chr., −562 = 563 v.Chr.
     function getLocalParts(date) {
+      let era = 'AD';
       const p = {};
       for (const part of tzFormatter.formatToParts(date)) {
-        if (part.type !== 'literal') p[part.type] = +part.value;
+        if (part.type === 'era') era = part.value;
+        else if (part.type !== 'literal') p[part.type] = +part.value;
       }
-      return { y: p.year, mo: p.month, d: p.day, h: p.hour, mi: p.minute, s: p.second };
+      const y = (era === 'BC' || era === 'B') ? 1 - p.year : p.year;
+      return { y, mo: p.month, d: p.day, h: p.hour, mi: p.minute, s: p.second };
     }
 
     // UTC-Millisekunden aus Kalenderteilen — bewusst NICHT Date.UTC(y, ...)
@@ -298,15 +317,27 @@
     // mitten in der Bedienung des Pickers überschreiben.
     // ============================================================
     function pad2(n) { return String(n).padStart(2, '0'); }
-    // Jahr vierstellig auffüllen — das date-Input verlangt "0800-06-15",
-    // nicht "800-06-15" (sonst wird der Wert verworfen und das Feld leer)
-    function toDateInputValue(local) { return `${String(local.y).padStart(4, '0')}-${pad2(local.mo)}-${pad2(local.d)}`; }
     function toTimeInputValue(local) { return `${pad2(local.h)}:${pad2(local.mi)}`; }
 
+    // Das Jahr lebt im separaten #yearInput (astronomische Zählung, auch
+    // negativ für v.Chr.) — ein date-Input kann prinzipiell keine Jahre
+    // vor 1 darstellen. Das date-Input liefert Tag+Monat; sein Jahresteil
+    // wird beim Sync auf 1..9999 geklemmt ("Proxy-Jahr") und ist per CSS
+    // ausgeblendet. Wählt der Nutzer im Kalender-Popup gezielt ein anderes
+    // Jahr (Jahresteil weicht vom zuletzt synchronisierten ab), gilt das —
+    // sonst gewinnt immer das Jahr-Feld.
+    let lastSyncedDateValue = '';
+
     function applyDateTimeInputs() {
-      const [y, m, day] = dateInput.value.split('-').map(Number);
-      const [hh, mm]    = timeInput.value.split(':').map(Number);
-      if (!y || !m || !day || isNaN(hh) || isNaN(mm)) return;  // unvollständige Eingabe ignorieren
+      const dParts   = dateInput.value.split('-').map(Number);
+      const [hh, mm] = timeInput.value.split(':').map(Number);
+      const yField   = Math.trunc(Number(yearInput.value));
+      if (dParts.length !== 3 || dParts.some(n => !Number.isFinite(n)) ||
+          !Number.isFinite(hh) || !Number.isFinite(mm) || !Number.isFinite(yField)) return;
+
+      const [pickerY, m, day] = dParts;
+      const prevPickerY = Number((lastSyncedDateValue || dateInput.value).split('-')[0]);
+      const y = (pickerY !== prevPickerY) ? pickerY : yField;
 
       // Eingabe ist Orts-Wandzeit (Zeitzone des gewählten Standorts)
       virtualAnchorSim  = wallTimeToDate(y, m, day, hh, mm);
@@ -314,13 +345,17 @@
     }
 
     function syncDateTimeInputs(local) {
-      if (document.activeElement === dateInput || document.activeElement === timeInput) return;
-      if (local.y < 1 || local.y > 9999) return;  // außerhalb des date-Input-Bereichs (z.B. Rückwärts-Zeitraffer)
-      dateInput.value = toDateInputValue(local);
+      if ([dateInput, yearInput, timeInput].includes(document.activeElement)) return;
+      const proxyY = Math.min(Math.max(local.y, 1), 9999);
+      const dv = `${String(proxyY).padStart(4, '0')}-${pad2(local.mo)}-${pad2(local.d)}`;
+      dateInput.value = dv;
+      lastSyncedDateValue = dv;
+      yearInput.value = local.y;
       timeInput.value = toTimeInputValue(local);
     }
 
     dateInput.addEventListener('change', applyDateTimeInputs);
+    yearInput.addEventListener('change', applyDateTimeInputs);
     timeInput.addEventListener('change', applyDateTimeInputs);
 
     // ============================================================

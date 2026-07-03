@@ -173,16 +173,41 @@ mit der nativen UI) — passt zum Projektgrundsatz "keine unzuverlässigen
 externen Abhängigkeiten" (vgl. Planeten-Eigenimplementierung,
 lokale JSON-Dateien statt CDN).
 
-**Verhalten:** Eine Änderung an einem der beiden Felder (`change`-Event)
+**Verhalten:** Eine Änderung an einem der Felder (`change`-Event)
 setzt `virtualAnchorSim`/`virtualAnchorReal` neu (siehe
 `applyDateTimeInputs`) — die virtuelle Zeit "springt" auf den gewählten
 Zeitpunkt, das aktuell eingestellte Zeitraffer-Tempo bleibt dabei
 UNVERÄNDERT (anders als der NOW-Knopf, der zusätzlich das Tempo
 zurücksetzt). Die Felder werden pro Tick mit der laufenden virtuellen Zeit
-synchronisiert (`syncDateTimeInputs`), aber NUR wenn keines der beiden
+synchronisiert (`syncDateTimeInputs`), aber NUR wenn keines davon
 gerade fokussiert ist — sonst würde der 10×/Sekunde-Tick die Eingabe mitten
 in der Bedienung des Pickers überschreiben. Bitte diese Fokus-Prüfung bei
 Änderungen an der Sync-Logik beibehalten.
+
+**Historische Daten inkl. v. Chr. (WICHTIG, nicht vereinfachen):** Ein
+`<input type="date">` kann prinzipiell KEINE Jahre vor 1 darstellen. Das
+Jahr lebt deshalb in einem separaten `#yearInput` (type="number",
+**astronomische Jahreszählung**: 0 = 1 v. Chr., −562 = 563 v. Chr.,
+Bereich −9999…9999). Der Jahresteil des date-Inputs wird beim Sync auf
+1…9999 geklemmt ("Proxy-Jahr") und ist per CSS ausgeblendet
+(`::-webkit-datetime-edit-year-field` — nur Chromium; in anderen Browsern
+erscheint das Jahr doppelt, harmlos). Wählt der Nutzer im Kalender-Popup
+gezielt ein anderes Jahr, gewinnt das Popup (Erkennung über
+`lastSyncedDateValue`-Vergleich in `applyDateTimeInputs`), sonst gilt
+immer das Jahr-Feld. Drei Fallstricke, die dabei gelöst wurden — bitte
+nicht wieder einbauen:
+1. `Date.UTC(80, …)` interpretiert Jahre 0–99 als 1900–1999 → Helfer
+   `utcMs` mit `setUTCFullYear` benutzen.
+2. `Intl.formatToParts` liefert für v.-Chr.-Daten year="563" OHNE
+   Unterscheidung zu 563 n. Chr. — nur mit `era: 'short'` in den
+   Formatter-Optionen kommt "BC" mit; `getLocalParts` rechnet dann
+   astronomisch um (y = 1 − year). Die era-Option NICHT entfernen.
+3. date-Input verlangt vierstellige Jahre ("0080-06-15"), sonst wird der
+   Wert verworfen und das Feld leert sich.
+Genauigkeits-Hinweis: Für Antike gilt — Sterne/Sternbilder gut (Präzession
+eingerechnet, aber keine Eigenbewegung: Arcturus & Co. über 2500 Jahre
+~1–2° verschoben), Sonne gut, Mond ~2–3° (ΔT unberücksichtigt), Planeten
+einige Grad. Eingaben zählen im proleptisch gregorianischen Kalender.
 
 **Layout:** Die Anzeige (`#debug`, enthält Datum/Uhrzeit-Inputs + Standort-
 Zeile) sitzt oben links (`top/left`), auf Schmalbildschirmen
