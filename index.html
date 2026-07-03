@@ -43,7 +43,7 @@
     #debug #locationLine { margin-top: 2px; }
     #locationInput { width: 170px; cursor: text; }
 
-    #eraToggle {
+    #eraToggle, #calBtn {
       font: inherit;
       color: #aeb9c7;
       background: rgba(255,255,255,0.06);
@@ -52,7 +52,18 @@
       padding: 2px 6px;
       cursor: pointer;
     }
-    #eraToggle:hover { background: rgba(255,255,255,0.12); }
+    #eraToggle:hover, #calBtn:hover { background: rgba(255,255,255,0.12); }
+    #dateText { width: 10ch; cursor: text; }
+    /* Das versteckte date-Input dient nur als Kalender-Popup-Quelle für
+       den 📅-Knopf (showPicker) — unsichtbar, aber im Layout verankert,
+       damit das Popup daneben aufgeht */
+    #dateInput {
+      position: absolute;
+      width: 1px; height: 1px;
+      opacity: 0;
+      pointer-events: none;
+      border: 0; padding: 0;
+    }
 
     /* Smartphone-Ansicht: Zeit-/Ortsangabe oben mittig statt oben links */
     @media (max-width: 600px) {
@@ -122,8 +133,12 @@
   <canvas id="clock" style="display:none"></canvas>
   <div id="loading">⭐ Lade Sternkatalog + Sternbilder…<br><small>( einmalig, danach im Browser-Cache )</small></div>
   <div id="debug">
-    <input type="date" id="dateInput" title="Datum ändern (Jahr bei v. Chr. als positive Zahl)"
-           aria-label="Datum" min="0001-01-01" max="9999-12-31">
+    <input type="text" id="dateText" inputmode="numeric"
+           title="Datum ändern — Format TT.MM.JJJJ (Jahr bei v. Chr. als positive Zahl)"
+           aria-label="Datum" placeholder="TT.MM.JJJJ">
+    <button id="calBtn" title="Kalender öffnen" aria-label="Kalender öffnen">📅</button>
+    <input type="date" id="dateInput" aria-hidden="true" tabindex="-1"
+           min="0001-01-01" max="9999-12-31">
     <button id="eraToggle" data-era="AD"
             title="Zeitrechnung umschalten — ein Klick wechselt zwischen n. Chr. und v. Chr.">n. Chr.</button>
     <input type="time" id="timeInput" title="Uhrzeit ändern" aria-label="Uhrzeit">
@@ -149,6 +164,8 @@
     const canvas       = document.getElementById('clock');
     const ctx          = canvas.getContext('2d');
     const loadingEl    = document.getElementById('loading');
+    const dateText     = document.getElementById('dateText');
+    const calBtn       = document.getElementById('calBtn');
     const dateInput    = document.getElementById('dateInput');
     const eraToggle    = document.getElementById('eraToggle');
     const timeInput    = document.getElementById('timeInput');
@@ -320,15 +337,19 @@
     function pad2(n) { return String(n).padStart(2, '0'); }
     function toTimeInputValue(local) { return `${pad2(local.h)}:${pad2(local.mi)}`; }
 
-    // Jahre v. Chr.: Ein date-Input kann prinzipiell keine Jahre vor 1
-    // darstellen. Deshalb zeigt das Datumsfeld das Jahr immer als POSITIVE
-    // Zahl (bei "563 v. Chr." steht dort 0563), und der Umschalt-Knopf
-    // #eraToggle daneben liefert die Zeitrechnung ("n. Chr." / "v. Chr.",
-    // ein Klick wechselt und springt sofort zum gespiegelten Jahr).
+    // Datum: frei editierbares Textfeld (TT.MM.JJJJ) — bewusst KEIN reines
+    // date-Input mehr: Auf Android ist ein date-Input nicht direkt tippbar
+    // (öffnet immer den Kalender-Dialog), und dessen Jahresauswahl ist
+    // praktisch auf ~1900–2100 begrenzt. Der 📅-Knopf öffnet zusätzlich den
+    // nativen Kalender-Picker (verstecktes date-Input + showPicker()) für
+    // bequeme Tag/Monat-Wahl; das Textfeld akzeptiert jedes Jahr 1–9999.
     //
-    // Intern rechnet alles in astronomischer Jahreszählung (0 = 1 v.Chr.,
-    // −562 = 563 v.Chr.): Es gibt historisch KEIN Jahr 0, auf 1 v.Chr.
-    // folgt 1 n.Chr. — daher der Versatz um 1 bei v.-Chr.-Jahren.
+    // Jahre v. Chr.: Das Jahr steht immer als POSITIVE Zahl im Feld, der
+    // Umschalt-Knopf #eraToggle liefert die Zeitrechnung ("n. Chr." /
+    // "v. Chr.", ein Klick wechselt und springt sofort). Intern rechnet
+    // alles in astronomischer Jahreszählung (0 = 1 v.Chr., −562 =
+    // 563 v.Chr.): Es gibt historisch KEIN Jahr 0, auf 1 v.Chr. folgt
+    // 1 n.Chr. — daher der Versatz um 1 bei v.-Chr.-Jahren.
     function eraFromAstroYear(y) {
       return y >= 1 ? { era: 'AD', disp: y } : { era: 'BC', disp: 1 - y };
     }
@@ -340,34 +361,60 @@
       eraToggle.textContent = era === 'BC' ? 'v. Chr.' : 'n. Chr.';
     }
 
-    function applyDateTimeInputs() {
-      const dParts   = dateInput.value.split('-').map(Number);
-      const [hh, mm] = timeInput.value.split(':').map(Number);
-      if (dParts.length !== 3 || dParts.some(n => !Number.isFinite(n) || n < 1) ||
-          !Number.isFinite(hh) || !Number.isFinite(mm)) return;
+    // "15.04.563", "15. 4. 0563", auch mit / oder - als Trenner
+    function parseDateText(text) {
+      const m = text.trim().match(/^(\d{1,2})\s*[./-]\s*(\d{1,2})\s*[./-]\s*(\d{1,4})$/);
+      if (!m) return null;
+      const day = +m[1], mo = +m[2], y = +m[3];
+      if (day < 1 || day > 31 || mo < 1 || mo > 12 || y < 1) return null;
+      return { day, mo, y };
+    }
 
-      const [dispY, m, day] = dParts;
-      const y = astroYearFrom(dispY, eraToggle.dataset.era);
+    function applyDateTimeInputs() {
+      const d        = parseDateText(dateText.value);
+      const [hh, mm] = timeInput.value.split(':').map(Number);
+      if (!d || !Number.isFinite(hh) || !Number.isFinite(mm)) {
+        if (!d) dateText.value = '';   // ungültig → nächster Sync-Tick schreibt das aktuelle Datum zurück
+        return;
+      }
+
+      const y = astroYearFrom(d.y, eraToggle.dataset.era);
 
       // Eingabe ist Orts-Wandzeit (Zeitzone des gewählten Standorts)
-      virtualAnchorSim  = wallTimeToDate(y, m, day, hh, mm);
+      virtualAnchorSim  = wallTimeToDate(y, d.mo, d.day, hh, mm);
       virtualAnchorReal = Date.now();
     }
 
     function syncDateTimeInputs(local) {
-      if (dateInput === document.activeElement || timeInput === document.activeElement) return;
+      if (dateText === document.activeElement || timeInput === document.activeElement) return;
       const e = eraFromAstroYear(local.y);
-      if (e.disp > 9999) return;  // außerhalb des date-Input-Bereichs (extremer Zeitraffer)
-      dateInput.value = `${String(e.disp).padStart(4, '0')}-${pad2(local.mo)}-${pad2(local.d)}`;
+      if (e.disp > 9999) return;  // außerhalb des darstellbaren Bereichs (extremer Zeitraffer)
+      dateText.value = `${pad2(local.d)}.${pad2(local.mo)}.${String(e.disp).padStart(4, '0')}`;
       setEraDisplay(e.era);
       timeInput.value = toTimeInputValue(local);
     }
 
-    dateInput.addEventListener('change', applyDateTimeInputs);
+    dateText.addEventListener('change', applyDateTimeInputs);
+    dateText.addEventListener('keydown', e => { if (e.key === 'Enter') dateText.blur(); });
     timeInput.addEventListener('change', applyDateTimeInputs);
     eraToggle.addEventListener('click', () => {
       setEraDisplay(eraToggle.dataset.era === 'BC' ? 'AD' : 'BC');
       applyDateTimeInputs();   // springt sofort zum gespiegelten Jahr
+    });
+
+    // 📅-Knopf: nativen Kalender-Picker über das versteckte date-Input öffnen.
+    // Vorbelegt mit dem aktuellen Datum (Jahr auf 1..9999 geklemmt); die
+    // Auswahl übernimmt Tag/Monat/Jahr in der AKTUELL eingestellten Zeitrechnung.
+    calBtn.addEventListener('click', () => {
+      const d = parseDateText(dateText.value);
+      if (d) dateInput.value = `${String(Math.min(d.y, 9999)).padStart(4, '0')}-${pad2(d.mo)}-${pad2(d.day)}`;
+      try { dateInput.showPicker(); } catch (e) { /* Browser ohne showPicker: nur Textfeld nutzbar */ }
+    });
+    dateInput.addEventListener('change', () => {
+      const parts = dateInput.value.split('-').map(Number);
+      if (parts.length !== 3 || parts.some(n => !Number.isFinite(n) || n < 1)) return;
+      dateText.value = `${pad2(parts[2])}.${pad2(parts[1])}.${String(parts[0]).padStart(4, '0')}`;
+      applyDateTimeInputs();
     });
 
     // ============================================================

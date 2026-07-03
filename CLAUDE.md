@@ -164,49 +164,54 @@ Iterations-/Schritt-Budget zurückfallen.
 
 ## Datum/Uhrzeit manuell einstellbar (Nutzer-Feature)
 
-Der Nutzer kann Datum und Uhrzeit direkt anklicken und ändern — dafür werden
-bewusst NATIVE Browser-Eingabefelder verwendet (`<input type="date">` /
-`<input type="time">`, `#dateInput` / `#timeInput`), keine externe
-Picker-Bibliothek. Klick öffnet automatisch den system-/browsereigenen
-Kalender- bzw. Uhrzeit-Picker (auf Desktop wie auf dem Smartphone jeweils
-mit der nativen UI) — passt zum Projektgrundsatz "keine unzuverlässigen
-externen Abhängigkeiten" (vgl. Planeten-Eigenimplementierung,
-lokale JSON-Dateien statt CDN).
+Der Nutzer kann Datum und Uhrzeit direkt anklicken und ändern. **Datum:**
+frei editierbares Textfeld `#dateText` (Format `TT.MM.JJJJ`, auch `/` oder
+`-` als Trenner, Parser `parseDateText`) plus 📅-Knopf `#calBtn`, der den
+nativen Kalender-Picker öffnet (verstecktes `<input type="date">`
+`#dateInput` + `showPicker()`). **Uhrzeit:** natives `<input type="time">`
+`#timeInput`. Keine externe Picker-Bibliothek — passt zum Projektgrundsatz
+"keine unzuverlässigen externen Abhängigkeiten".
+
+**WICHTIG — warum Textfeld statt reinem date-Input (Nutzer-Feedback,
+nicht rückbauen):** Auf Android ist ein `<input type="date">` NICHT
+direkt tippbar (öffnet immer den Kalender-Dialog), und dessen
+Jahresauswahl ist praktisch auf ~1900–2100 begrenzt — historische Daten
+waren so am Handy nicht eingebbar. Das Textfeld akzeptiert jedes Jahr
+1–9999 auf allen Geräten; der Kalender-Picker bleibt als Komfort-Option
+für Tag/Monat-Wahl erhalten (Auswahl übernimmt das Jahr in der aktuell
+eingestellten Zeitrechnung).
 
 **Verhalten:** Eine Änderung an einem der Felder (`change`-Event)
 setzt `virtualAnchorSim`/`virtualAnchorReal` neu (siehe
 `applyDateTimeInputs`) — die virtuelle Zeit "springt" auf den gewählten
 Zeitpunkt, das aktuell eingestellte Zeitraffer-Tempo bleibt dabei
 UNVERÄNDERT (anders als der NOW-Knopf, der zusätzlich das Tempo
-zurücksetzt). Die Felder werden pro Tick mit der laufenden virtuellen Zeit
+zurücksetzt). Ungültiger Datumstext wird verworfen (Feld geleert, der
+nächste Sync-Tick schreibt das aktuelle Datum zurück; die Zeit bleibt
+unverändert). Die Felder werden pro Tick mit der laufenden virtuellen Zeit
 synchronisiert (`syncDateTimeInputs`), aber NUR wenn keines davon
 gerade fokussiert ist — sonst würde der 10×/Sekunde-Tick die Eingabe mitten
-in der Bedienung des Pickers überschreiben. Bitte diese Fokus-Prüfung bei
+in der Bedienung überschreiben. Bitte diese Fokus-Prüfung bei
 Änderungen an der Sync-Logik beibehalten.
 
-**Historische Daten inkl. v. Chr. (WICHTIG, nicht vereinfachen):** Ein
-`<input type="date">` kann prinzipiell KEINE Jahre vor 1 darstellen. Das
-Datumsfeld zeigt das Jahr deshalb immer als POSITIVE Zahl (bei
-"563 v. Chr." steht dort `0563`), und der Umschalt-Knopf `#eraToggle`
-daneben liefert die Zeitrechnung ("n. Chr." / "v. Chr.", ein Klick
-wechselt und springt sofort zum gespiegelten Jahr). Bewusst SO — zwei
-frühere Varianten wurden auf Nutzer-Feedback hin verworfen: negative
-Jahreszahlen in einem separaten Feld (nicht intuitiv) und ein separates
-positives Jahr-Feld zusätzlich zum Datumsfeld (redundant, da der
-Jahresteil des date-Inputs sich nicht browserübergreifend ausblenden
-lässt — `::-webkit-datetime-edit-year-field` wirkt nur in Chromium).
-Intern rechnet alles in **astronomischer Jahreszählung** (0 = 1 v. Chr.,
-−562 = 563 v. Chr. — es gibt historisch kein Jahr 0, daher Versatz um 1;
-Umrechnung: `eraFromAstroYear`/`astroYearFrom`). Drei Fallstricke, die
-dabei gelöst wurden — bitte nicht wieder einbauen:
+**Historische Daten inkl. v. Chr. (WICHTIG, nicht vereinfachen):** Das
+Jahr steht immer als POSITIVE Zahl im Datumsfeld (bei "563 v. Chr." steht
+dort `15.04.0563`), und der Umschalt-Knopf `#eraToggle` daneben liefert
+die Zeitrechnung ("n. Chr." / "v. Chr.", ein Klick wechselt und springt
+sofort zum gespiegelten Jahr). Bewusst SO — zwei frühere Varianten wurden
+auf Nutzer-Feedback hin verworfen: negative Jahreszahlen in einem
+separaten Feld (nicht intuitiv) und ein separates positives Jahr-Feld
+zusätzlich zum Datumsfeld (redundant). Intern rechnet alles in
+**astronomischer Jahreszählung** (0 = 1 v. Chr., −562 = 563 v. Chr. — es
+gibt historisch kein Jahr 0, daher Versatz um 1; Umrechnung:
+`eraFromAstroYear`/`astroYearFrom`). Zwei Fallstricke, die dabei gelöst
+wurden — bitte nicht wieder einbauen:
 1. `Date.UTC(80, …)` interpretiert Jahre 0–99 als 1900–1999 → Helfer
    `utcMs` mit `setUTCFullYear` benutzen.
 2. `Intl.formatToParts` liefert für v.-Chr.-Daten year="563" OHNE
    Unterscheidung zu 563 n. Chr. — nur mit `era: 'short'` in den
    Formatter-Optionen kommt "BC" mit; `getLocalParts` rechnet dann
    astronomisch um (y = 1 − year). Die era-Option NICHT entfernen.
-3. date-Input verlangt vierstellige Jahre ("0080-06-15"), sonst wird der
-   Wert verworfen und das Feld leert sich.
 Genauigkeits-Hinweis: Für Antike gilt — Sterne/Sternbilder gut (Präzession
 eingerechnet, aber keine Eigenbewegung: Arcturus & Co. über 2500 Jahre
 ~1–2° verschoben), Sonne gut, Mond ~2–3° (ΔT unberücksichtigt), Planeten
