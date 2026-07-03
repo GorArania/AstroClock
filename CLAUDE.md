@@ -79,27 +79,34 @@ function skyToDialXY(azDeg, altDeg, rotation, cx, cy, R) {
 
 ---
 
-## NICHT ÄNDERN OHNE RÜCKFRAGE: Zwei Bahn-Varianten
+## NICHT ÄNDERN OHNE RÜCKFRAGE: Keine Bahnlinien mehr — pendelnde Auf-/Untergangs-Labels
 
-Bei den Tagesbahnen von Sonne und Mond über die Scheibe gibt es zwei
-Konventionen, die NICHT gleichzeitig exakt erfüllbar sind:
+**Frühere Design-Entscheidung (verworfen):** Es gab einmal zwei Bahn-Varianten
+("B" uhrzeit-treu für die Sonne, "A streng" richtungs-treu für den Mond), die
+als gezeichnete Verlaufslinie über die Scheibe liefen. Diese Bahnlinien wurden
+**ersatzlos entfernt**: Wegen des im Tagesverlauf pendelnden Nordens (siehe
+oben) wirkten die Linien irreführend/missverständlich für den Betrachter.
 
-- **Variante B (uhrzeit-treu):** Jeder Bahnpunkt zur Zeit T sitzt an der
-  Position, die dem Objekt zur Zeit T *auf der Uhr* zusteht. Endpunkte liegen
-  exakt auf den Auf-/Untergangs-**Uhrzeit-Marken**.
-- **Variante A streng (richtungs-treu):** Jeder Bahnpunkt nutzt die Rotation,
-  die *zum jeweiligen Zeitpunkt T* gilt. Endpunkte liegen an der echten
-  Auf-/Untergangs-**Himmelsrichtung**.
+**Aktuelle Lösung:** Für Sonne UND Mond wird nur noch ein Zeit-Label am Rand
+angezeigt (`↑ HH:MM` / `↓ HH:MM`), analog zum früheren Mond-Label. Die
+Position dieses Labels:
+- nutzt den **echten, festen Azimut** des Auf-/Untergangs-Ereignisses
+  (berechnet einmalig aus SunCalc-Position zum exakten Ereigniszeitpunkt),
+- wird aber jeden Frame mit der **aktuellen** Rotation auf die Scheibe
+  projiziert (`skyToDialXY(azDeg, 0, rotation, ...)`) — genau die gleiche
+  Rotation, die auch der Kompass benutzt.
 
-**Bewusste Entscheidung — bitte NICHT vereinheitlichen:**
-- **Sonnenbahn → Variante B.** Passt zur Grundidee "Sonne = Uhrzeit".
-- **Mondbahn → Variante A streng.** Der Mond ist kein Uhrzeiger, er soll
-  ortsgebunden verlaufen, wie er wirklich über den Himmel wandert. Da die
-  Endpunkte dadurch NICHT auf den Uhrzeit-Marken liegen, werden Auf-/
-  Untergangszeit explizit an den Bahn-Enden eingeblendet (`↑ 21:46` / `↓ 04:45`).
+**Ergebnis:** Das Label "pendelt" im Tagesverlauf exakt synchron mit den
+Kompass-Himmelsrichtungen mit (weil beide dieselbe Rotation zur Positions-
+berechnung verwenden). Der Nutzer kann so Ort (Himmelsrichtung) UND Zeit des
+Auf-/Untergangs direkt ablesen, ohne dass eine (missverständliche) Linie über
+die Scheibe gezogen wird.
 
-Der Unterschied wurde bewusst so gewählt, nachdem beide Varianten
-durchgerechnet und die Konsequenzen mit Beispieldaten verifiziert wurden.
+Betroffene Funktionen: `computeSunRiseSet`, `computeMoonRiseSet`,
+`drawRiseSetLabel` (ersetzen die früheren `computeSunPath`, `computeMoonPath`,
+`drawPath`, `drawPathEndpointLabel`). Bitte hier nicht wieder eine
+Bahnlinie einführen, ohne das explizit abzusprechen — das war ein bewusster
+Rückbau auf Nutzerwunsch, kein Zwischenstand.
 
 ---
 
@@ -111,7 +118,7 @@ heute Abend aufgeht und erst morgen früh untergeht, NICHT dasselbe
 Sichtbarkeitsintervall. Ein naiver Ansatz ("nimm rise und set vom selben
 Kalendertag") führt zu einer falschen, "zusammengerissenen" Bahn.
 
-**Korrekte Lösung (bereits implementiert in `computeMoonPath`):** Sammle
+**Korrekte Lösung (bereits implementiert in `computeMoonRiseSet`):** Sammle
 Mond-Ereignisse aus einem Fenster von gestern/heute/morgen ein, sortiere sie
 chronologisch, und finde das gerade laufende oder nächste zusammenhängende
 Sichtbarkeitsintervall (abhängig davon, ob der Mond gerade jetzt über dem
@@ -149,7 +156,8 @@ Horizont steht oder nicht). Bitte diese Logik nicht durch eine simplere
 
 ## Layout — zwei getrennte Radien
 
-- **R_sky** — Himmelskuppel (Sterne, Sternbilder, Planeten, Sonne, Mond, Bahnen)
+- **R_sky** — Himmelskuppel (Sterne, Sternbilder, Planeten, Sonne, Mond,
+  Auf-/Untergangs-Labels)
 - **R_outer** — äußerer Zifferblatt-Ring (Stundenzahlen + Teilstriche), liegt
   AUSSERHALB der Himmelskuppel, bewusst so verlegt, damit die Himmels-
   darstellung nicht durch Zahlen/Striche verdeckt wird
@@ -228,9 +236,9 @@ anlegen.
 
 ## Arbeitsweise / Erwartungshaltung
 
-- Bei Änderungen an der Kernmathematik (Rotation, Bahn-Varianten, Grenzgröße-
-  Logik) bitte kurz erklären, was sich ändert und warum, bevor es umgesetzt
-  wird — nicht einfach still durchändern
+- Bei Änderungen an der Kernmathematik (Rotation, Auf-/Untergangs-Labels,
+  Grenzgröße-Logik) bitte kurz erklären, was sich ändert und warum, bevor es
+  umgesetzt wird — nicht einfach still durchändern
 - Bei mathematischen Behauptungen lieber nachrechnen (z.B. mit einem
   kurzen Python-Snippet) als aus dem Gedächtnis zu behaupten
 - Ehrlich benennen, wenn ein gewünschtes Feature mit einer bereits

@@ -471,28 +471,17 @@
     }
 
     // ============================================================
-    // NEU: Bahn der Sonne / des Mondes über den Tag (Variante B)
-    //
-    // Für jeden Sample-Zeitpunkt T entlang der Bahn:
-    //   1. Sonnen-/Mond-Azimut und -Höhe zu diesem T berechnen
-    //   2. Sonnen-Azimut zu diesem T berechnen (für die Rotation)
-    //   3. Rotation = Uhrzeit-Winkel(T) - Sonnen-Azimut(T)
-    //   4. Position des Objekts auf der Uhr = Objekt-Azimut + Rotation
-    //
-    // Resultat: jeder Bahn-Punkt liegt da, wo das Objekt zu diesem T
-    // auf dem Zifferblatt stehen WIRD. Endpunkte sind exakt auf den
-    // Auf-/Untergangs-Uhrzeit-Marken.
+    // Auf-/Untergang von Sonne und Mond: Uhrzeit + realer Azimut (feste
+    // Himmelsrichtung). Keine Bahnlinie mehr — die Verlaufslinien wurden
+    // wegen des im Tagesverlauf pendelnden Nordens als irreführend
+    // empfunden (siehe "Norden pendelt" weiter oben). Stattdessen wird
+    // nur noch ein Zeit-Label an der jeweiligen Himmelsrichtung gezeigt,
+    // das (wie der Kompass) mit der AKTUELLEN Rotation projiziert wird —
+    // dadurch pendelt das Label im Tagesverlauf synchron mit den
+    // Himmelsrichtungen mit. Siehe drawRiseSetLabel() weiter unten.
     // ============================================================
 
-    function rotationAtTime(date) {
-      const pos = SunCalc.getPosition(date, LAT, LON);
-      const azFromNorth = normalizeAngle(pos.azimuth + Math.PI);
-      const h = date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600;
-      const clockAngle = (h / 24) * 2 * Math.PI;
-      return clockAngle - azFromNorth;
-    }
-
-    function computeSunPath(today) {
+    function computeSunRiseSet(today) {
       // SunCalc.getTimes liefert sunrise/sunset für den lokalen Tag
       const times = SunCalc.getTimes(today, LAT, LON);
       const rise  = times.sunrise;
@@ -502,23 +491,14 @@
       if (!rise || isNaN(rise.getTime()) || !set || isNaN(set.getTime())) return null;
       if (set <= rise) return null;
 
-      const points = [];
-      const stepMs = 5 * 60 * 1000;  // alle 5 Minuten ein Sample
+      const riseAz = normalizeAngle(SunCalc.getPosition(rise, LAT, LON).azimuth + Math.PI) * 180 / Math.PI;
+      const setAz  = normalizeAngle(SunCalc.getPosition(set,  LAT, LON).azimuth + Math.PI) * 180 / Math.PI;
 
-      for (let t = rise.getTime(); t <= set.getTime(); t += stepMs) {
-        const when = new Date(t);
-        const pos  = SunCalc.getPosition(when, LAT, LON);
-        const altDeg = pos.altitude * 180 / Math.PI;
-        const azDeg  = normalizeAngle(pos.azimuth + Math.PI) * 180 / Math.PI;
-        const rot    = rotationAtTime(when);
-        points.push({ azDeg, altDeg, rotation: rot, time: when });
-      }
-
-      return { rise, set, points };
+      return { rise, riseAz, set, setAz };
     }
 
-    function computeMoonPath(today) {
-      // Mond-Bahn: das aktuelle ODER nächste sichtbare Intervall finden.
+    function computeMoonRiseSet(today) {
+      // Mond-Sichtbarkeitsintervall: das aktuelle ODER nächste finden.
       //
       // Komplikation: getMoonTimes() liefert Auf-/Untergang innerhalb EINES Tages.
       // Wenn der Mond heute Abend aufgeht (z.B. 21:51) und morgen früh untergeht
@@ -561,50 +541,25 @@
 
       if (!rise || !set || set <= rise) return null;
 
-      const points = [];
-      const stepMs = 5 * 60 * 1000;
-      for (let t = rise.getTime(); t <= set.getTime(); t += stepMs) {
-        const when = new Date(t);
-        const pos  = SunCalc.getMoonPosition(when, LAT, LON);
-        const altDeg = pos.altitude * 180 / Math.PI;
-        const azDeg  = normalizeAngle(pos.azimuth + Math.PI) * 180 / Math.PI;
-        const rot    = rotationAtTime(when);
-        points.push({ azDeg, altDeg, rotation: rot, time: when });
-      }
-      return { rise, set, points };
-    }
+      const riseAz = normalizeAngle(SunCalc.getMoonPosition(rise, LAT, LON).azimuth + Math.PI) * 180 / Math.PI;
+      const setAz  = normalizeAngle(SunCalc.getMoonPosition(set,  LAT, LON).azimuth + Math.PI) * 180 / Math.PI;
 
-    function drawPath(cx, cy, R, path, strokeStyle, lineWidth) {
-      if (!path || path.points.length < 2) return;
-
-      ctx.beginPath();
-      for (let i = 0; i < path.points.length; i++) {
-        const p = path.points[i];
-        const [x, y] = skyToDialXY(p.azDeg, p.altDeg, p.rotation, cx, cy, R);
-        if (i === 0) ctx.moveTo(x, y);
-        else         ctx.lineTo(x, y);
-      }
-      ctx.strokeStyle = strokeStyle;
-      ctx.lineWidth   = lineWidth;
-      ctx.lineCap     = 'round';
-      ctx.lineJoin    = 'round';
-      ctx.stroke();
+      return { rise, riseAz, set, setAz };
     }
 
     // ============================================================
-    // NEU: Zeit-Labels an den Endpunkten einer Bahn
+    // Auf-/Untergangs-Zeit-Label: Position = realer Azimut des Ereignisses
+    // (fest), projiziert über die AKTUELLE Rotation auf die Scheibe — genau
+    // wie beim Kompass. Dadurch pendelt das Label im Tagesverlauf
+    // synchron mit den Himmelsrichtungen mit (statt fix zu stehen).
     //
-    // Für die Mondbahn wichtig: die Endpunkte liegen NICHT auf den
-    // Uhrzeit-Marken (anders als bei der Sonne), deshalb braucht es
-    // die explizite Zeit-Beschriftung.
-    //
-    // Das Label wird radial nach außen vom Endpunkt versetzt, damit
+    // Das Label wird radial nach innen vom Horizont-Punkt versetzt, damit
     // es nicht das Zifferblatt überdeckt.
     // ============================================================
-    function drawPathEndpointLabel(cx, cy, R, point, timeStr, color) {
-      const [x, y] = skyToDialXY(point.azDeg, point.altDeg, point.rotation, cx, cy, R);
+    function drawRiseSetLabel(cx, cy, R, azDeg, rotation, timeStr, color) {
+      const [x, y] = skyToDialXY(azDeg, 0, rotation, cx, cy, R);
 
-      // Richtung vom Mittelpunkt zum Endpunkt
+      // Richtung vom Mittelpunkt zum Horizont-Punkt
       const dx = x - cx, dy = y - cy;
       const dist = Math.sqrt(dx*dx + dy*dy);
       if (dist < 1) return;
@@ -1051,23 +1006,23 @@
     }
 
     // ============================================================
-    // Bahn-Cache: Sonnenbahn ändert sich nur einmal pro Tag spürbar,
-    // Mondbahn häufiger (wegen schnellem Auf/Untergang) → alle 30 Min.
+    // Auf-/Untergangs-Cache: Sonne ändert sich nur einmal pro Tag spürbar,
+    // Mond häufiger (wegen schnellem Auf/Untergang) → alle 30 Min.
     // ============================================================
-    let cachedSunPath   = null;
-    let cachedMoonPath  = null;
-    let cachedDateKey   = '';
-    let cachedMoonTime  = 0;
+    let cachedSunRiseSet  = null;
+    let cachedMoonRiseSet = null;
+    let cachedDateKey     = '';
+    let cachedMoonTime    = 0;
 
-    function updatePathsIfNeeded(now) {
+    function updateRiseSetIfNeeded(now) {
       const key = now.toDateString();
       if (key !== cachedDateKey) {
-        cachedSunPath = computeSunPath(now);
-        cachedDateKey = key;
+        cachedSunRiseSet = computeSunRiseSet(now);
+        cachedDateKey    = key;
       }
       if (Math.abs(now.getTime() - cachedMoonTime) > 30 * 60 * 1000) {
-        cachedMoonPath = computeMoonPath(now);
-        cachedMoonTime = now.getTime();
+        cachedMoonRiseSet = computeMoonRiseSet(now);
+        cachedMoonTime    = now.getTime();
       }
     }
 
@@ -1088,7 +1043,7 @@
       const moonData = getMoonData(now, rotation);
       const cx = size / 2, cy = size / 2;
       // Zwei Radien — der Kern der Layout-Änderung:
-      // R_sky   = Himmelskuppel / Horizont (Sterne, Sonne, Mond, Bahnen leben hier)
+      // R_sky   = Himmelskuppel / Horizont (Sterne, Sonne, Mond leben hier)
       // R_outer = Äußerer Zifferblatt-Ring (Stunden-Marken und Zahlen leben hier)
       const R_sky   = (size / 2) * 0.81;
       const R_outer = (size / 2) * 0.94;
@@ -1099,23 +1054,25 @@
       drawStarField(cx, cy, R_sky, rotation, lstDeg, sunData.altitudeDeg);          // 1. Sterne
       drawConstellations(cx, cy, R_sky, rotation, lstDeg, sunData.altitudeDeg);     // 2. Sternbild-Linien
 
-      // 3. Planeten (über Sternen, unter Bahnen/Mond/Sonne)
+      // 3. Planeten (über Sternen, unter Mond/Sonne)
       computePlanetPositions(now, lstDeg);
       drawPlanets(cx, cy, R_sky, rotation, sunData.altitudeDeg);
 
-      // 3. Sonnen- und Mondbahn
-      updatePathsIfNeeded(now);
-      drawPath(cx, cy, R_sky, cachedSunPath,  'rgba(255, 200, 80, 0.55)', Math.max(1.5, size * 0.0025));
-      drawPath(cx, cy, R_sky, cachedMoonPath, 'rgba(180, 200, 230, 0.45)', Math.max(1.2, size * 0.0020));
-
-      // 4. Zeit-Labels an Mondbahn-Endpunkten
-      if (cachedMoonPath && cachedMoonPath.points.length >= 2) {
-        const firstPt = cachedMoonPath.points[0];
-        const lastPt  = cachedMoonPath.points[cachedMoonPath.points.length - 1];
-        drawPathEndpointLabel(cx, cy, R_sky, firstPt,
-          '↑ ' + formatTime(cachedMoonPath.rise), 'rgba(200, 220, 245, 0.95)');
-        drawPathEndpointLabel(cx, cy, R_sky, lastPt,
-          '↓ ' + formatTime(cachedMoonPath.set),  'rgba(200, 220, 245, 0.95)');
+      // 4. Auf-/Untergangs-Zeit-Labels für Sonne und Mond, an der jeweils
+      //    echten Himmelsrichtung — Position pendelt mit der aktuellen
+      //    Rotation, genau wie der Kompass (siehe drawRiseSetLabel).
+      updateRiseSetIfNeeded(now);
+      if (cachedSunRiseSet) {
+        drawRiseSetLabel(cx, cy, R_sky, cachedSunRiseSet.riseAz, rotation,
+          '↑ ' + formatTime(cachedSunRiseSet.rise), 'rgba(255, 210, 130, 0.95)');
+        drawRiseSetLabel(cx, cy, R_sky, cachedSunRiseSet.setAz, rotation,
+          '↓ ' + formatTime(cachedSunRiseSet.set),  'rgba(255, 210, 130, 0.95)');
+      }
+      if (cachedMoonRiseSet) {
+        drawRiseSetLabel(cx, cy, R_sky, cachedMoonRiseSet.riseAz, rotation,
+          '↑ ' + formatTime(cachedMoonRiseSet.rise), 'rgba(200, 220, 245, 0.95)');
+        drawRiseSetLabel(cx, cy, R_sky, cachedMoonRiseSet.setAz, rotation,
+          '↓ ' + formatTime(cachedMoonRiseSet.set),  'rgba(200, 220, 245, 0.95)');
       }
 
       drawDial(cx, cy, R_outer, R_sky);                        // 5. Zifferblatt (außen)
