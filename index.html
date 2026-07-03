@@ -111,7 +111,8 @@
   <canvas id="clock" style="display:none"></canvas>
   <div id="loading">⭐ Lade Sternkatalog + Sternbilder…<br><small>( einmalig, danach im Browser-Cache )</small></div>
   <div id="debug">
-    <input type="date" id="dateInput" title="Datum ändern" aria-label="Datum">
+    <input type="date" id="dateInput" title="Datum ändern" aria-label="Datum"
+           min="0001-01-01" max="9999-12-31">
     <input type="time" id="timeInput" title="Uhrzeit ändern" aria-label="Uhrzeit">
     <div id="locationLine">
       Standort: <input type="text" id="locationInput"
@@ -184,14 +185,24 @@
       return { y: p.year, mo: p.month, d: p.day, h: p.hour, mi: p.minute, s: p.second };
     }
 
+    // UTC-Millisekunden aus Kalenderteilen — bewusst NICHT Date.UTC(y, ...)
+    // direkt: das interpretiert Jahre 0–99 als 1900–1999 (JS-Altlast).
+    // setUTCFullYear umgeht das und macht historische Jahre (1–99) korrekt.
+    function utcMs(y, mo, d, hh, mi, s) {
+      const dt = new Date(0);
+      dt.setUTCFullYear(y, mo - 1, d);
+      dt.setUTCHours(hh, mi, s, 0);
+      return dt.getTime();
+    }
+
     // Umkehrung: Orts-Wandzeit → absoluter Zeitpunkt. Iterativ über den
     // Offset gelöst (konvergiert in 1 Schritt, an Sommerzeit-Grenzen in 2).
     function wallTimeToDate(y, mo, d, hh, mi) {
-      let guessMs = Date.UTC(y, mo - 1, d, hh, mi, 0);
+      let guessMs = utcMs(y, mo, d, hh, mi, 0);
       const wantMs = guessMs;
       for (let i = 0; i < 3; i++) {
         const p = getLocalParts(new Date(guessMs));
-        const haveMs = Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi, p.s);
+        const haveMs = utcMs(p.y, p.mo, p.d, p.h, p.mi, p.s);
         if (haveMs === wantMs) break;
         guessMs += wantMs - haveMs;
       }
@@ -287,7 +298,9 @@
     // mitten in der Bedienung des Pickers überschreiben.
     // ============================================================
     function pad2(n) { return String(n).padStart(2, '0'); }
-    function toDateInputValue(local) { return `${local.y}-${pad2(local.mo)}-${pad2(local.d)}`; }
+    // Jahr vierstellig auffüllen — das date-Input verlangt "0800-06-15",
+    // nicht "800-06-15" (sonst wird der Wert verworfen und das Feld leer)
+    function toDateInputValue(local) { return `${String(local.y).padStart(4, '0')}-${pad2(local.mo)}-${pad2(local.d)}`; }
     function toTimeInputValue(local) { return `${pad2(local.h)}:${pad2(local.mi)}`; }
 
     function applyDateTimeInputs() {
@@ -302,6 +315,7 @@
 
     function syncDateTimeInputs(local) {
       if (document.activeElement === dateInput || document.activeElement === timeInput) return;
+      if (local.y < 1 || local.y > 9999) return;  // außerhalb des date-Input-Bereichs (z.B. Rückwärts-Zeitraffer)
       dateInput.value = toDateInputValue(local);
       timeInput.value = toTimeInputValue(local);
     }
