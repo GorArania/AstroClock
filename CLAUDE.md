@@ -188,10 +188,31 @@ in der Bedienung des Pickers überschreiben. Bitte diese Fokus-Prüfung bei
 Zeile) sitzt oben links (`top/left`), auf Schmalbildschirmen
 (`max-width: 600px`) oben mittig zentriert.
 
-**Standort ist aktuell noch NICHT editierbar** — nur die Zeit. Die
-Standort-Zeile zeigt weiterhin die festen LAT/LON-Werte (Zwenkau) als reinen
-Text. Editierbarkeit des Standorts ist als nächster Schritt geplant (siehe
-"Bekannte offene Punkte").
+**Standort ist jetzt ebenfalls editierbar** (`#locationInput`, Textfeld statt
+reinem Text): Eingabe von entweder
+- **Koordinaten** — erkannt per Regex (`parseCoordinates`), Format
+  `LAT, LON` als Dezimalzahlen (z. B. `51.22, 12.32`), KEIN Netzwerk-Zugriff
+  nötig, funktioniert immer offline.
+- **Stadtname/Adresse** — alles andere wird als Ortsname behandelt und per
+  **OpenStreetMap Nominatim** (`geocodePlace`, kostenloser öffentlicher
+  Geocoding-Dienst, kein API-Key) in Koordinaten umgewandelt.
+
+**Bewusste Ausnahme von "keine externen Laufzeit-Abhängigkeiten":** Dies ist
+die EINZIGE Stelle im Projekt, die zur Laufzeit einen externen Dienst
+kontaktiert — nur bei aktiver Nutzereingabe (Ortssuche), nicht beim
+normalen Laden/Anzeigen der Uhr. Passt trotzdem zum Projektgrundsatz, weil
+es kein Dauerhaftes/Wiederholtes Laden ist (anders als der verworfene
+CDN-Ansatz für Sternkatalog/astronomy-engine) und es für Geocoding keine
+sinnvolle Offline-Alternative gibt.
+
+`LAT`/`LON` sind seit dieser Änderung `let` statt `const` (waren vorher
+fest). Eine Standort-Änderung setzt `cachedDateKey`/`cachedMoonTime` zurück
+(`invalidateLocationCaches`), damit Sonnen-/Mond-Auf-/Untergang sofort mit
+den neuen Koordinaten neu berechnet werden — der Tages-Cache reagiert sonst
+nur auf Datumswechsel, nicht auf Standortwechsel.
+
+Automatische Standort-Ermittlung per GPS/Sensor bleibt bewusst außen vor
+(siehe Scope-Grenze, Phase 2/Android).
 
 ---
 
@@ -336,9 +357,9 @@ anlegen.
 
 ## Bekannte offene Punkte
 
-1. **Standort manuell editierbar machen** — Datum/Uhrzeit sind bereits
-   klickbar änderbar (native Picker, siehe oben), der Standort (LAT/LON)
-   ist aktuell noch reiner Text. Nächster geplanter Schritt.
+1. ~~Standort manuell editierbar machen~~ — erledigt (Stadtname/Adresse via
+   Nominatim ODER Koordinaten-Eingabe, siehe oben). Automatische Ortung per
+   GPS bleibt bewusst Phase 2/Android.
 2. Weitere Änderungsideen — werden zu Beginn dieser Sitzung vom Nutzer
    ergänzt, hier ggf. noch nicht erfasst
 3. Nach Abschluss dieser Sitzung: Rückkehr zum Linux-Mint-PC-Workflow
