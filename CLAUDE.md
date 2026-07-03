@@ -126,12 +126,27 @@ liegen auf `R * 0.91`, die Auf-/Untergangs-Labels auf fast demselben Radius
 schrieb der Text bisher die Kompass-Buchstaben zu. Lösung in
 `resolveCompassCollisions`: Die Kompass-Position ist das feste Referenzraster
 und bleibt unverändert; das kollidierende Auf-/Untergangs-Label wird
-stattdessen schrittweise weiter nach innen (Richtung Zentrum) verschoben, bis
-es die Bounding-Box des Kompass-Buchstabens nicht mehr überlappt. Der
+stattdessen weiter nach innen (Richtung Zentrum) verschoben, bis es die
+Bounding-Box des Kompass-Buchstabens nicht mehr überlappt. Der
 Markierungspunkt bleibt wie immer exakt an der echten Position — nur der
-Text weicht aus. `drawCompass` bekommt die Positionen inzwischen aus
+Text weicht aus. `drawCompass` bekommt die Positionen aus
 `computeCompassLabelPositions` übergeben (einmal pro Frame berechnet), damit
 Zeichnen und Kollisionsprüfung dieselbe Geometrie verwenden.
+
+**Wichtig — analytisch, nicht iterativ mit festem Schritt/Budget:** Eine
+erste Version schob in kleinen festen Schritten (z. B. 8× `size*0.01`) nach
+innen, bis keine Kollision mehr erkannt wurde. Das reichte je nach Tagesdatum
+manchmal nicht aus (Label blieb teilweise unter dem Kompass-Buchstaben
+verdeckt, ohne dass ein Fehler sichtbar war — wirkte wie "Zeit fehlt
+komplett"). `resolveCompassCollisions` berechnet den nötigen Schub jetzt
+exakt (löst nach der Verschiebung entlang der Einwärts-Richtung auf, bei der
+x- oder y-Abstand gerade ausreicht), mit `maxPushCap = size*0.25` nur als
+Sicherheitsobergrenze für Extremfälle. Zusätzlich läuft die Auflösung
+zwischen Zeit-Labels (`resolveLabelCollisions`) und die mit dem Kompass
+(`resolveCompassCollisions`) in 3 abwechselnden Runden — ein Ausweichen vor
+dem einen kann sonst eine neue Kollision mit dem anderen erzeugen. Bitte bei
+künftigen Änderungen an dieser Logik nicht wieder auf ein festes
+Iterations-/Schritt-Budget zurückfallen.
 
 ---
 

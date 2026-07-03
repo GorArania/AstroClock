@@ -608,15 +608,20 @@
     // Kompass-Buchstaben liegen auf fast demselben Radius (0.91*R) wie die
     // Auf-/Untergangs-Labels (~R minus Einwärts-Versatz) — deshalb können
     // sie sich decken. Die Kompass-Position bleibt fix (Referenzgitter),
-    // stattdessen wird das betroffene Auf-/Untergangs-Label schrittweise
-    // weiter nach innen (Richtung Zentrum) geschoben, bis es frei steht —
-    // es landet dadurch sichtbar UNTER/INNERHALB des Kompass-Buchstabens,
-    // statt ihn zu überschreiben.
+    // stattdessen wird das betroffene Auf-/Untergangs-Label weiter nach
+    // innen (Richtung Zentrum) geschoben, bis es frei steht.
+    //
+    // Der nötige Schub wird ANALYTISCH berechnet (nicht in kleinen festen
+    // Schritten angenähert): Für jede Kollision wird exakt ausgerechnet,
+    // wie weit man entlang der Einwärts-Richtung schieben muss, damit die
+    // Bounding-Box auf mindestens einer Achse (x ODER y) frei kommt. Ein zu
+    // kleines, festes Iterations-Budget hatte zuvor manchmal nicht gereicht
+    // (Label blieb teilweise verdeckt) — das ist damit ausgeschlossen.
     // ============================================================
     function resolveCompassCollisions(cx, cy, labels, compassPositions, riseSetFontSize) {
       const halfHRiseSet = riseSetFontSize * 0.4;
       const pad = size * 0.006;
-      const step = size * 0.01;
+      const maxPushCap = size * 0.25;  // Sicherheitsobergrenze gegen Extremfälle
 
       for (const l of labels) {
         if (!l.pos) continue;
@@ -624,15 +629,32 @@
         const rlen = Math.hypot(rx, ry) || 1;
         const inX = -rx / rlen, inY = -ry / rlen;  // Richtung: nach innen zum Zentrum
 
-        for (let iter = 0; iter < 8; iter++) {
-          const collided = compassPositions.some(c => {
-            const dx = l.pos.lx - c.x, dy = l.pos.ly - c.y;
-            return Math.abs(dx) < (l.halfW || 0) + c.halfW + pad &&
-                   Math.abs(dy) < halfHRiseSet + c.halfH + pad;
-          });
-          if (!collided) break;
-          l.pos.lx += inX * step;
-          l.pos.ly += inY * step;
+        let neededPush = 0;
+        for (const c of compassPositions) {
+          const dx = l.pos.lx - c.x, dy = l.pos.ly - c.y;
+          const minDistX = (l.halfW || 0) + c.halfW + pad;
+          const minDistY = halfHRiseSet + c.halfH + pad;
+          if (Math.abs(dx) >= minDistX || Math.abs(dy) >= minDistY) continue;  // schon frei
+
+          // Schub entlang (inX, inY), bis x- ODER y-Abstand reicht — der
+          // kleinere der beiden nötigen Werte reicht zum Entkommen.
+          let tx = Infinity, ty = Infinity;
+          if (Math.abs(inX) > 1e-6) {
+            const t = ((dx >= 0 ? minDistX : -minDistX) - dx) / inX;
+            if (t > 0) tx = t;
+          }
+          if (Math.abs(inY) > 1e-6) {
+            const t = ((dy >= 0 ? minDistY : -minDistY) - dy) / inY;
+            if (t > 0) ty = t;
+          }
+          const t = Math.min(tx, ty);
+          if (isFinite(t)) neededPush = Math.max(neededPush, t);
+        }
+
+        if (neededPush > 0) {
+          const push = Math.min(neededPush, maxPushCap);
+          l.pos.lx += inX * push;
+          l.pos.ly += inY * push;
         }
       }
     }
@@ -1177,10 +1199,15 @@
       ctx.font = RISE_SET_FONT();
       for (const l of riseSetLabels) l.halfW = ctx.measureText(l.text).width / 2;
       const labelMinSeparation = Math.max(...riseSetLabels.map(l => l.halfW * 2), 0) + size * 0.015;
-      resolveLabelCollisions(cx, cy, riseSetLabels, labelMinSeparation);
-
       const compassPositions = computeCompassLabelPositions(cx, cy, R_sky, rotation);
-      resolveCompassCollisions(cx, cy, riseSetLabels, compassPositions, riseSetFontSize);
+
+      // Mehrere Runden abwechselnd auflösen: Das Ausweichen vor dem Kompass
+      // kann ein Label in den Weg eines anderen Zeit-Labels schieben (und
+      // umgekehrt) — ein einzelner Durchlauf reichte dafür manchmal nicht.
+      for (let round = 0; round < 3; round++) {
+        resolveLabelCollisions(cx, cy, riseSetLabels, labelMinSeparation);
+        resolveCompassCollisions(cx, cy, riseSetLabels, compassPositions, riseSetFontSize);
+      }
 
       for (const l of riseSetLabels) drawRiseSetLabel(l.pos, l.text, l.color);
 
