@@ -91,7 +91,7 @@ oben) wirkten die Linien irreführend/missverständlich für den Betrachter.
 angezeigt (`↑ HH:MM` / `↓ HH:MM`), analog zum früheren Mond-Label. Die
 Position dieses Labels:
 - nutzt den **echten, festen Azimut** des Auf-/Untergangs-Ereignisses
-  (berechnet einmalig aus SunCalc-Position zum exakten Ereigniszeitpunkt),
+  (berechnet einmalig aus der Position zum exakten Ereigniszeitpunkt),
 - wird aber jeden Frame mit der **aktuellen** Rotation auf die Scheibe
   projiziert (`skyToDialXY(azDeg, 0, rotation, ...)`) — genau die gleiche
   Rotation, die auch der Kompass benutzt.
@@ -214,8 +214,10 @@ wurden — bitte nicht wieder einbauen:
    astronomisch um (y = 1 − year). Die era-Option NICHT entfernen.
 Genauigkeits-Hinweis: Für Antike gilt — Sterne/Sternbilder gut (Präzession
 eingerechnet, aber keine Eigenbewegung: Arcturus & Co. über 2500 Jahre
-~1–2° verschoben), Sonne gut, Mond ~2–3° (ΔT unberücksichtigt), Planeten
-einige Grad. Eingaben zählen im proleptisch gregorianischen Kalender.
+~1–2° verschoben), Sonne gut (Jahreszeiten stabil, eigene Meeus-Theorie),
+Mond ~1° (ΔT eingerechnet), Planeten einige Grad. Eingaben zählen im
+proleptisch gregorianischen Kalender — historische Quellen vor 1582
+nutzen meist den julianischen Kalender (in der Antike ~2 Tage Versatz).
 
 **Layout:** Die Anzeige (`#debug`, enthält Datum/Uhrzeit-Inputs + Standort-
 Zeile) sitzt oben links (`top/left`), auf Schmalbildschirmen
@@ -270,8 +272,8 @@ Zentrale Funktionen: `updateTimezone` (bei jedem Standortwechsel via
 `onLocationChanged`), `getLocalParts` (Zeitpunkt → Orts-Wandzeit-Teile,
 einmal pro Frame in `tick()` berechnet und durchgereicht),
 `wallTimeToDate` (Umkehrung für die Datum/Uhrzeit-Eingabe, iterativ über
-den Offset, konvergiert an Sommerzeitgrenzen in 2 Schritten). SunCalc,
-Sternzeit (`getLST`) und die ganze Himmelsmathematik arbeiten weiterhin mit
+den Offset, konvergiert an Sommerzeitgrenzen in 2 Schritten). Sternzeit
+(`getLST`) und die ganze Himmelsmathematik arbeiten weiterhin mit
 absoluten Zeitpunkten — dort hat sich NICHTS geändert. Der Tages-Cache-
 Schlüssel in `updateRiseSetIfNeeded` nutzt das ORTS-Datum.
 
@@ -279,6 +281,39 @@ Schlüssel in `updateRiseSetIfNeeded` nutzt das ORTS-Datum.
 NORD-Seite (astronomisch korrekt, Deklination 23° > Breite 14,7°), alle
 Zeiten in Dakar-Ortszeit. Das war der Anlass für diese Änderung: vorher
 liefen die Uhrzeiten in Geräte-Zeitzone, der Himmel aber am gewählten Ort.
+
+---
+
+## Eigene Sonnen-/Mondtheorie nach Meeus + ΔT (SunCalc komplett ersetzt)
+
+**SunCalc wurde vollständig entfernt** (war die letzte CDN-Abhängigkeit —
+die App lädt jetzt komplett ohne externes JS). Grund war ein echter
+Fehler, kein Stilwunsch: SunCalcs Sonnentheorie hält die Periheldrehung
+der Erdbahn fest (real ~1,7°/Jahrhundert). Dadurch drifteten die
+JAHRESZEITEN um ~1,7 Tage pro Jahrhundert — 5 Wochen im Jahr 1, ~3 Monate
+um 3000 v. Chr. (Frühlingsäquinoktium lag laut App im Winter).
+
+**Ersatz (alles in `index.html`, Abschnitt "ΔT / SONNE / MOND"):**
+- **Sonne** — Meeus Kap. 25 (`sunEclipticLon`, `sunEquatorial`,
+  `sunAltAz`), mit T²-Gliedern und wanderndem Perihel. Verifiziert:
+  Äquinoktium 2026 auf 7 min genau, Äquinoktium 3000 v. Chr. am 21.3. —
+  Jahreszeiten bleiben über ±5000 Jahre auf Stunden genau am Kalender.
+- **Mond** — Meeus Kap. 47, gekürzte Reihe (alle Terme ≥ ~0,01°;
+  `MOON_LON_TERMS`/`MOON_LAT_TERMS`, `moonEclipticLonLat`,
+  `moonEquatorial`, `moonAltAz`), Phase aus der Elongation
+  (`moonPhase01`). Geozentrisch, Parallaxe bewusst vernachlässigt
+  (stilisierte Anzeige, war bei SunCalc genauso).
+- **ΔT** — `deltaTSeconds` (stückweise Polynome nach Espenak & Meeus,
+  NASA-Standard) + `ttFromUT`. Bahnpositionen (Sonne/Mond/Planeten)
+  rechnen in TT; Sternzeit/`getLST` bleibt bewusst auf Uhrzeit (UT) —
+  physikalisch korrekt, NICHT "vereinheitlichen". Ohne ΔT wäre der Mond
+  3000 v. Chr. ~11° falsch.
+- **Auf-/Untergänge** — gemeinsamer Sucher `findRiseSetEvents`
+  (20-min-Abtastung + Bisektion), Schwellen `SUN_RISESET_H0 = −0,833°`,
+  `MOON_RISESET_H0 = +0,125°` (Standardwerte inkl. Refraktion).
+
+Gegen SunCalc verifiziert (moderne Zeit): Sonne/Mond-Position ≤0,7°,
+Phase ≤0,001, Sonnen-Auf-/Untergang ≤2 min, Mondaufgang ≤3 min.
 
 ---
 
@@ -303,25 +338,29 @@ kontinuierliche Drehung nach parallaktischem Winkel (stilisierte Anzeige).
 
 ## NICHT ÄNDERN OHNE RÜCKFRAGE: Mond-Auf-/Untergangszeiten-Suche
 
-**Bekannter, bereits gefixter Bug:** `SunCalc.getMoonTimes(heute)` liefert
-Auf- und Untergang für EINEN Kalendertag — das ist bei einem Mond, der z.B.
-heute Abend aufgeht und erst morgen früh untergeht, NICHT dasselbe
-Sichtbarkeitsintervall. Ein naiver Ansatz ("nimm rise und set vom selben
-Kalendertag") führt zu einer falschen, "zusammengerissenen" Bahn.
+**Grundproblem (einmal falsch gelöst, dann gefixt):** Auf- und Untergang
+desselben Mond-Sichtbarkeitsintervalls können auf VERSCHIEDENE
+Kalendertage fallen (Mond geht heute Abend auf, morgen früh unter). Ein
+naiver Ansatz ("nimm rise und set vom selben Kalendertag") kombiniert
+Zeiten aus zwei verschiedenen Intervallen.
 
-**Korrekte Lösung (bereits implementiert in `computeMoonRiseSet`):** Sammle
-Mond-Ereignisse aus einem Fenster von gestern/heute/morgen ein, sortiere sie
-chronologisch, und finde das gerade laufende oder nächste zusammenhängende
-Sichtbarkeitsintervall (abhängig davon, ob der Mond gerade jetzt über dem
-Horizont steht oder nicht). Bitte diese Logik nicht durch eine simplere
-"einfach getMoonTimes() von heute nehmen"-Version ersetzen.
+**Korrekte Lösung (implementiert in `computeMoonRiseSet`):** Alle
+Mond-Ereignisse in einem ±36h-Fenster chronologisch einsammeln
+(inzwischen über den eigenen Höhen-Sucher `findRiseSetEvents` statt
+früher `SunCalc.getMoonTimes`) und das gerade laufende oder nächste
+zusammenhängende Sichtbarkeitsintervall auswählen (abhängig davon, ob der
+Mond gerade jetzt über der Ereignis-Schwelle steht oder nicht). Bitte
+diese Intervall-Logik nicht durch eine simplere Kalendertags-Version
+ersetzen.
 
 ---
 
-## Datenquellen — STANDARD seit Kürzlichem: lokale JSON-Dateien
+## Datenquellen — STANDARD: alles lokal, KEIN CDN mehr
 
-- **SunCalc** — Sonnen-/Mondposition, Auf-/Untergangszeiten. Wird weiterhin
-  vom CDN geladen (cdnjs.cloudflare.com). https://github.com/mourner/suncalc
+- **Sonne/Mond** — selbst implementiert nach Meeus Kap. 25/47/48 inkl.
+  ΔT-Korrektur (siehe eigenen Abschnitt oben). SunCalc (früher vom CDN
+  geladen) wurde vollständig ersetzt und entfernt — die App hat damit
+  KEINE externe JS-Abhängigkeit mehr.
 - **Sternkatalog + Sternbild-Linien** — NUR als Datenquelle (GeoJSON),
   NICHT als Rendering-Engine (d3-celestials eigene Projektions-API wird
   nicht genutzt, komplettes Rendering läuft über eigene Canvas-Pipeline).

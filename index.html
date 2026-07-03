@@ -4,7 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AstroClock</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/suncalc/1.9.0/suncalc.min.js"></script>
+  <!-- Sonne/Mond/Planeten sind komplett selbst implementiert (Jean Meeus,
+       "Astronomical Algorithms") — keine CDN-Abhängigkeit mehr. -->
   <!-- Lokale Zeitzonen-Zuordnung Lat/Lon → IANA-Zeitzonenname (tz-lookup, lokal
        eingebunden gemäß Projektgrundsatz). Die eigentlichen Offset-/Sommerzeit-
        regeln kommen dann vom Browser selbst (Intl API) — keine weitere Datenquelle. -->
@@ -844,17 +845,21 @@
     // ============================================================
 
     function computeSunRiseSet(today) {
-      // SunCalc.getTimes liefert sunrise/sunset für den lokalen Tag
-      const times = SunCalc.getTimes(today, LAT, LON);
-      const rise  = times.sunrise;
-      const set   = times.sunset;
+      // Fenster = lokaler Kalendertag des Standorts (Ortszeit-Mitternacht
+      // bis Mitternacht), Höhen-Durchgänge mit dem gemeinsamen Sucher
+      const local = getLocalParts(today);
+      const dayStart = wallTimeToDate(local.y, local.mo, local.d, 0, 0).getTime();
+      const sunAlt = d => sunAltAz(d).altDeg;
+      const ev = findRiseSetEvents(sunAlt, dayStart, dayStart + 86400000, SUN_RISESET_H0);
 
-      // Polartage/-nächte abfangen
-      if (!rise || isNaN(rise.getTime()) || !set || isNaN(set.getTime())) return null;
-      if (set <= rise) return null;
+      const rise = ev.find(e => e.type === 'rise')?.time || null;
+      const set  = ev.find(e => e.type === 'set' && (!rise || e.time > rise))?.time || null;
 
-      const riseAz = normalizeAngle(SunCalc.getPosition(rise, LAT, LON).azimuth + Math.PI) * 180 / Math.PI;
-      const setAz  = normalizeAngle(SunCalc.getPosition(set,  LAT, LON).azimuth + Math.PI) * 180 / Math.PI;
+      // Polartage/-nächte (keine Durchgänge) abfangen
+      if (!rise || !set || set <= rise) return null;
+
+      const riseAz = sunAltAz(rise).azDeg;
+      const setAz  = sunAltAz(set).azDeg;
 
       return { rise, riseAz, set, setAz };
     }
@@ -862,28 +867,19 @@
     function computeMoonRiseSet(today) {
       // Mond-Sichtbarkeitsintervall: das aktuelle ODER nächste finden.
       //
-      // Komplikation: getMoonTimes() liefert Auf-/Untergang innerhalb EINES Tages.
-      // Wenn der Mond heute Abend aufgeht (z.B. 21:51) und morgen früh untergeht
-      // (03:45), dann liefert getMoonTimes() für "heute" ein Paar rise/set, das
-      // sich NICHT auf dieselbe Sichtbarkeitsperiode bezieht.
-      //
-      // Lösung: Wir holen die Auf-/Untergänge für gestern, heute, morgen,
-      // sortieren sie, und finden das nächste Intervall "Mond über Horizont"
-      // das jetzt läuft oder bevorsteht.
+      // Wichtig: Auf- und Untergang desselben Sichtbarkeitsintervalls können
+      // auf VERSCHIEDENE Kalendertage fallen (Mond geht abends auf, morgens
+      // unter). Deshalb: alle Ereignisse in einem ±36h-Fenster chronologisch
+      // einsammeln und das gerade laufende oder nächste zusammenhängende
+      // Intervall "Mond über Horizont" auswählen.
 
-      const events = [];   // Liste aller Mond-Ereignisse (rise/set) in einem ±36h Fenster
-      for (let dayOffset = -1; dayOffset <= 1; dayOffset++) {
-        const d = new Date(today.getTime() + dayOffset * 86400000);
-        const t = SunCalc.getMoonTimes(d, LAT, LON);
-        if (t.rise && !isNaN(t.rise.getTime())) events.push({ type: 'rise', time: t.rise });
-        if (t.set  && !isNaN(t.set.getTime()))  events.push({ type: 'set',  time: t.set  });
-      }
-      events.sort((a, b) => a.time - b.time);
+      const moonAlt = d => moonAltAz(d).altDeg;
+      const events = findRiseSetEvents(moonAlt,
+        today.getTime() - 36 * 3600000, today.getTime() + 36 * 3600000, MOON_RISESET_H0);
       if (events.length === 0) return null;   // sehr exotische Fälle (z.B. Polargebiete)
 
-      // Aktueller Mondstand: über oder unter Horizont?
-      const nowAlt = SunCalc.getMoonPosition(today, LAT, LON).altitude;
-      const moonUp = nowAlt > 0;
+      // Aktueller Mondstand: über oder unter der Ereignis-Schwelle?
+      const moonUp = moonAlt(today) > MOON_RISESET_H0;
 
       let rise = null, set = null;
 
@@ -903,8 +899,8 @@
 
       if (!rise || !set || set <= rise) return null;
 
-      const riseAz = normalizeAngle(SunCalc.getMoonPosition(rise, LAT, LON).azimuth + Math.PI) * 180 / Math.PI;
-      const setAz  = normalizeAngle(SunCalc.getMoonPosition(set,  LAT, LON).azimuth + Math.PI) * 180 / Math.PI;
+      const riseAz = moonAltAz(rise).azDeg;
+      const setAz  = moonAltAz(set).azDeg;
 
       return { rise, riseAz, set, setAz };
     }
@@ -1169,8 +1165,10 @@
     }
 
     function planetAltAz(body, date, lstDeg) {
-      const T   = getT(date);
-      const eps = toR(23.439291 - 0.013004 * T);  // Schiefe der Ekliptik
+      // Bahnposition in TT (ΔT-korrigiert); die Erddrehung steckt im
+      // mitgegebenen lstDeg, das bewusst aus der Uhrzeit (UT) kommt
+      const T   = getT(ttFromUT(date));
+      const eps = toR(obliquityDeg(T));  // Schiefe der Ekliptik
 
       const e = helioXYZ(T, 'Earth');
       const p = helioXYZ(T, body);
@@ -1306,28 +1304,184 @@
     }
 
     // ============================================================
-    // Sonnen- und Mond-Daten (unverändert aus Schritt 4)
+    // ΔT — Differenz zwischen gleichmäßiger Physikzeit (TT, Basis aller
+    // Bahnberechnungen) und Erdrotations-/Uhrzeit (UT). Die Erdrotation
+    // verlangsamt sich messbar; ohne diese Korrektur wäre z.B. der Mond
+    // 3000 v. Chr. um ~11° falsch. Stückweise Polynome nach Espenak &
+    // Meeus ("Five Millennium Canon of Solar Eclipses", NASA).
+    //
+    // Anwendung: Bahnpositionen (Sonne/Mond/Planeten) rechnen mit
+    // ttFromUT(date); Sternzeit/Erddrehung (getLST) bleibt bewusst auf
+    // der Uhrzeit — das ist physikalisch korrekt so.
+    // ============================================================
+    function deltaTSeconds(y) {
+      if (y < -500 || y >= 2150) { const u = (y - 1820) / 100; return -20 + 32*u*u; }
+      if (y <  500) { const u = y/100;        return 10583.6 - 1014.41*u + 33.78311*u**2 - 5.952053*u**3 - 0.1798452*u**4 + 0.022174192*u**5 + 0.0090316521*u**6; }
+      if (y < 1600) { const u = (y-1000)/100; return 1574.2 - 556.01*u + 71.23472*u**2 + 0.319781*u**3 - 0.8503463*u**4 - 0.005050998*u**5 + 0.0083572073*u**6; }
+      if (y < 1700) { const t = y-1600; return 120 - 0.9808*t - 0.01532*t**2 + t**3/7129; }
+      if (y < 1800) { const t = y-1700; return 8.83 + 0.1603*t - 0.0059285*t**2 + 0.00013336*t**3 - t**4/1174000; }
+      if (y < 1860) { const t = y-1800; return 13.72 - 0.332447*t + 0.0068612*t**2 + 0.0041116*t**3 - 0.00037436*t**4 + 0.0000121272*t**5 - 0.0000001699*t**6 + 0.000000000875*t**7; }
+      if (y < 1900) { const t = y-1860; return 7.62 + 0.5737*t - 0.251754*t**2 + 0.01680668*t**3 - 0.0004473624*t**4 + t**5/233174; }
+      if (y < 1920) { const t = y-1900; return -2.79 + 1.494119*t - 0.0598939*t**2 + 0.0061966*t**3 - 0.000197*t**4; }
+      if (y < 1941) { const t = y-1920; return 21.20 + 0.84493*t - 0.076100*t**2 + 0.0020936*t**3; }
+      if (y < 1961) { const t = y-1950; return 29.07 + 0.407*t - t**2/233 + t**3/2547; }
+      if (y < 1986) { const t = y-1975; return 45.45 + 1.067*t - t**2/260 - t**3/718; }
+      if (y < 2005) { const t = y-2000; return 63.86 + 0.3345*t - 0.060374*t**2 + 0.0017275*t**3 + 0.000651814*t**4 + 0.00002373599*t**5; }
+      if (y < 2050) { const t = y-2000; return 62.92 + 0.32217*t + 0.005589*t**2; }
+      const u = (y - 1820) / 100;
+      return -20 + 32*u*u - 0.5628*(2150 - y);
+    }
+
+    function ttFromUT(date) {
+      const y = date.getUTCFullYear() + (date.getUTCMonth() + 0.5) / 12;
+      return new Date(date.getTime() + deltaTSeconds(y) * 1000);
+    }
+
+    // Ekliptikschiefe (Meeus 22.2, gekürzt) — gemeinsam für Sonne/Mond/Planeten
+    function obliquityDeg(T) {
+      return 23.43929111 - 0.01300417*T - 1.64e-7*T*T + 5.036e-7*T*T*T;
+    }
+
+    // ============================================================
+    // SONNE — Meeus Kap. 25 (geometrische Position). Ersetzt SunCalc:
+    // dessen Theorie hielt die Periheldrehung der Erdbahn fest (real
+    // ~1,7°/Jahrhundert) — dadurch drifteten die Jahreszeiten um
+    // ~1,7 Tage pro Jahrhundert (5 Wochen im Jahr 1, ~3 Monate um
+    // 3000 v. Chr.). Mit den T²-Gliedern hier bleiben die Jahreszeiten
+    // über ±5000 Jahre auf Stunden genau an den Kalenderdaten.
+    // ============================================================
+    function sunEclipticLon(ttDate) {   // Grad
+      const T  = getT(ttDate);
+      const L0 = 280.46646 + 36000.76983*T + 0.0003032*T*T;
+      const M  = toR(n360(357.52911 + 35999.05029*T - 0.0001537*T*T));
+      const C  = (1.914602 - 0.004817*T - 0.000014*T*T) * Math.sin(M)
+               + (0.019993 - 0.000101*T) * Math.sin(2*M)
+               + 0.000289 * Math.sin(3*M);
+      return n360(L0 + C - 0.00569);    // −0.00569° konstante Aberration
+    }
+
+    function sunEquatorial(ttDate) {
+      const lam = toR(sunEclipticLon(ttDate));
+      const eps = toR(obliquityDeg(getT(ttDate)));
+      const ra  = Math.atan2(Math.cos(eps)*Math.sin(lam), Math.cos(lam));
+      const dec = Math.asin(Math.sin(eps)*Math.sin(lam));
+      return { ra_h: n360(toD(ra)) / 15, dec_deg: toD(dec) };
+    }
+
+    function sunAltAz(date) {
+      const eq = sunEquatorial(ttFromUT(date));
+      return equatToHoriz(eq.ra_h, eq.dec_deg, getLST(date, LON), LAT);
+    }
+
+    // ============================================================
+    // MOND — Meeus Kap. 47 (gekürzte Reihe, alle Terme ≥ ~0,01°).
+    // Mittlere Elemente mit T²/T³-Gliedern — bleibt auch Jahrtausende
+    // vor/zurück brauchbar (~0,2° heute, ~1° in der Antike; geozentrisch,
+    // Parallaxe bewusst vernachlässigt — stilisierte Anzeige).
+    // ============================================================
+    const MOON_LON_TERMS = [   // [D, M, M', F, Koeffizient in Grad]
+      [0,0,1,0, 6.288774], [2,0,-1,0, 1.274027], [2,0,0,0, 0.658314],
+      [0,0,2,0, 0.213618], [0,1,0,0,-0.185116], [0,0,0,2,-0.114332],
+      [2,0,-2,0, 0.058793], [2,-1,-1,0, 0.057066], [2,0,1,0, 0.053322],
+      [2,-1,0,0, 0.045758], [0,1,-1,0,-0.040923], [1,0,0,0,-0.034720],
+      [0,1,1,0,-0.030383], [2,0,0,-2, 0.015327], [0,0,1,2,-0.012528],
+      [0,0,1,-2, 0.010980],
+    ];
+    const MOON_LAT_TERMS = [
+      [0,0,0,1, 5.128122], [0,0,1,1, 0.280602], [0,0,1,-1, 0.277693],
+      [2,0,0,-1, 0.173237], [2,0,-1,1, 0.055413], [2,0,-1,-1, 0.046271],
+      [2,0,0,1, 0.032573], [0,0,2,1, 0.017198],
+    ];
+
+    function moonEclipticLonLat(ttDate) {
+      const T  = getT(ttDate);
+      const LpDeg = n360(218.3164477 + 481267.88123421*T - 0.0015786*T*T + T*T*T/538841);
+      const D  = toR(n360(297.8501921 + 445267.1114034*T - 0.0018819*T*T + T*T*T/545868));
+      const M  = toR(n360(357.5291092 + 35999.0502909*T - 0.0001536*T*T));
+      const Mp = toR(n360(134.9633964 + 477198.8675055*T + 0.0087414*T*T + T*T*T/69699));
+      const F  = toR(n360(93.2720950  + 483202.0175233*T - 0.0036539*T*T));
+      const E  = 1 - 0.002516*T - 0.0000074*T*T;   // Exzentrizitäts-Korrektur für M-Terme
+
+      let sumL = 0, sumB = 0;
+      for (const [d, m, mp, f, c] of MOON_LON_TERMS) {
+        const eFac = m === 0 ? 1 : (Math.abs(m) === 1 ? E : E * E);
+        sumL += c * eFac * Math.sin(d*D + m*M + mp*Mp + f*F);
+      }
+      for (const [d, m, mp, f, c] of MOON_LAT_TERMS) {
+        const eFac = m === 0 ? 1 : (Math.abs(m) === 1 ? E : E * E);
+        sumB += c * eFac * Math.sin(d*D + m*M + mp*Mp + f*F);
+      }
+      return { lonDeg: n360(LpDeg + sumL), latDeg: sumB };
+    }
+
+    function moonEquatorial(ttDate) {
+      const { lonDeg, latDeg } = moonEclipticLonLat(ttDate);
+      const lam = toR(lonDeg), bet = toR(latDeg);
+      const eps = toR(obliquityDeg(getT(ttDate)));
+      const ra  = Math.atan2(Math.sin(lam)*Math.cos(eps) - Math.tan(bet)*Math.sin(eps), Math.cos(lam));
+      const dec = Math.asin(Math.sin(bet)*Math.cos(eps) + Math.cos(bet)*Math.sin(eps)*Math.sin(lam));
+      return { ra_h: n360(toD(ra)) / 15, dec_deg: toD(dec) };
+    }
+
+    function moonAltAz(date) {
+      const eq = moonEquatorial(ttFromUT(date));
+      return equatToHoriz(eq.ra_h, eq.dec_deg, getLST(date, LON), LAT);
+    }
+
+    // Mondphase 0..1 (0 = Neumond, 0.5 = Vollmond) aus der Elongation
+    // Mond−Sonne in ekliptikaler Länge (Meeus Kap. 48, vereinfacht)
+    function moonPhase01(date) {
+      const tt = ttFromUT(date);
+      return n360(moonEclipticLonLat(tt).lonDeg - sunEclipticLon(tt)) / 360;
+    }
+
+    // ============================================================
+    // Gemeinsamer Auf-/Untergangs-Sucher: tastet die Höhe in 20-Minuten-
+    // Schritten ab und verfeinert jeden Schwellen-Durchgang per Bisektion.
+    // h0 = Schwellen-Höhe des Ereignisses (Standardwerte: Sonne −0,833°
+    // für Refraktion + Scheibenradius; Mond +0,125° für Refraktion +
+    // Parallaxe − Scheibenradius).
+    // ============================================================
+    function findRiseSetEvents(altFn, fromMs, toMs, h0) {
+      const events = [];
+      const step = 20 * 60 * 1000;
+      let prevBelow = altFn(new Date(fromMs)) < h0;
+      for (let t = fromMs + step; t <= toMs; t += step) {
+        const below = altFn(new Date(t)) < h0;
+        if (below !== prevBelow) {
+          let lo = t - step, hi = t;
+          for (let i = 0; i < 30; i++) {
+            const mid = (lo + hi) / 2;
+            if ((altFn(new Date(mid)) < h0) === prevBelow) lo = mid; else hi = mid;
+          }
+          events.push({ type: prevBelow ? 'rise' : 'set', time: new Date((lo + hi) / 2) });
+        }
+        prevBelow = below;
+      }
+      return events;
+    }
+
+    const SUN_RISESET_H0  = -0.833;
+    const MOON_RISESET_H0 =  0.125;
+
+    // ============================================================
+    // Sonnen- und Mond-Daten für die Anzeige
     // ============================================================
     function getSunData(now, local) {
-      const pos = SunCalc.getPosition(now, LAT, LON);
-      const altitudeDeg = pos.altitude * (180 / Math.PI);
+      const pos = sunAltAz(now);
       // Uhrzeit-Winkel aus der ORTSZEIT des Standorts (nicht des Geräts)
       const h = local.h + local.mi / 60 + local.s / 3600 + now.getMilliseconds() / 3600000;
-      const azimuthFromNorth = normalizeAngle(pos.azimuth + Math.PI);
-      return { h, altitudeDeg, isDay: altitudeDeg > 0, azimuthFromNorth };
+      return { h, altitudeDeg: pos.altDeg, isDay: pos.altDeg > 0, azimuthFromNorth: toR(pos.azDeg) };
     }
 
     function getMoonData(now, rotation) {
-      const moonPos = SunCalc.getMoonPosition(now, LAT, LON);
-      const moonIll = SunCalc.getMoonIllumination(now);
-      const moonAltDeg = moonPos.altitude * (180 / Math.PI);
-      const moonAzDeg  = normalizeAngle(moonPos.azimuth + Math.PI) * 180 / Math.PI;
-      const ca = normalizeAngle(moonAzDeg * Math.PI / 180 + rotation);
+      const pos = moonAltAz(now);
+      const ca = normalizeAngle(toR(pos.azDeg) + rotation);
       return {
         h: (ca / (2 * Math.PI)) * 24,
-        altitudeDeg: moonAltDeg,
-        isAboveHorizon: moonAltDeg > 0,
-        phase: moonIll.phase,
+        altitudeDeg: pos.altDeg,
+        isAboveHorizon: pos.altDeg > 0,
+        phase: moonPhase01(now),
       };
     }
 
