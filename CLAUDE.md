@@ -120,6 +120,18 @@ der Tangente des Horizontrings auseinandergeschoben, nicht radial und nicht
 zufällig. Bitte diesen Mechanismus beibehalten, falls weitere Labels
 (z. B. Planeten-Auf-/Untergänge) hinzukommen sollten.
 
+**Wichtig — Ausweich-Richtung anhand der Punkte, nicht der Array-Reihenfolge:**
+Eine erste Version entschied "Label A weicht −Tangente, Label B weicht
++Tangente aus" rein nach der Reihenfolge im Array. Das konnte dazu führen,
+dass z. B. der Mond-Text UNTER dem Sonnen-Text landete, obwohl der
+Mond-PUNKT tatsächlich weiter oben lag als der Sonnen-Punkt — verwirrend,
+weil Text-Reihenfolge und Punkt-Reihenfolge dann nicht mehr zusammenpassten.
+`resolveLabelCollisions` bestimmt die Ausweich-Richtung jetzt anhand der
+Projektion der (unveränderlichen) Punkt-Positionen auf die Tangente — das
+Label, dessen Punkt weiter in eine Richtung liegt, weicht auch mit seinem
+Text in genau diese Richtung aus. Bitte bei Änderungen an dieser Funktion
+sicherstellen, dass diese Punkt-Text-Konsistenz erhalten bleibt.
+
 **Kollisionsfall Kompass-Beschriftung:** Die Kompass-Buchstaben (N/NO/O/…)
 liegen auf `R * 0.91`, die Auf-/Untergangs-Labels auf fast demselben Radius
 (`R` minus Einwärts-Versatz) — bei Ereignissen nahe einer Himmelsrichtung

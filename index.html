@@ -581,6 +581,12 @@
     // werden entlang der Tangente des Horizontrings auseinandergeschoben
     // (nicht radial), sodass sie sichtbar am Ring "entlanggleiten" statt
     // sich zu überlagern oder wahllos zu verspringen.
+    //
+    // Wichtig: Welches Label in welche Richtung ausweicht, wird anhand der
+    // (unveränderlichen) PUNKT-Positionen entschieden, nicht anhand der
+    // Array-Reihenfolge — sonst kann die Text-Reihenfolge nicht mehr zur
+    // Punkt-Reihenfolge passen (z. B. Mond-Text unter statt über dem
+    // Sonnen-Text, obwohl der Mond-Punkt weiter oben liegt).
     // ============================================================
     function resolveLabelCollisions(cx, cy, labels, minSeparation) {
       for (let i = 0; i < labels.length; i++) {
@@ -593,13 +599,20 @@
           if (dist >= minSeparation) continue;
 
           // Tangente am Horizontring an dieser Stelle (senkrecht zum Radius)
-          const rx = a.lx - cx, ry = a.ly - cy;
+          const rx = a.x - cx, ry = a.y - cy;
           const rlen = Math.hypot(rx, ry) || 1;
           const tx = -ry / rlen, ty = rx / rlen;
 
+          // Reihenfolge entlang der Tangente anhand der PUNKTE (a.x/a.y,
+          // b.x/b.y) bestimmen — das Label mit dem "weiter vorne" liegenden
+          // Punkt bekommt auch den "weiter vorne" liegenden Text.
+          const projA = a.x * tx + a.y * ty;
+          const projB = b.x * tx + b.y * ty;
+          const sign = projA >= projB ? 1 : -1;
+
           const push = (minSeparation - dist) / 2 + 2;
-          a.lx -= tx * push; a.ly -= ty * push;
-          b.lx += tx * push; b.ly += ty * push;
+          a.lx += sign * tx * push; a.ly += sign * ty * push;
+          b.lx -= sign * tx * push; b.ly -= sign * ty * push;
         }
       }
     }
