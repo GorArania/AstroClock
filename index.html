@@ -604,6 +604,39 @@
       }
     }
 
+    // ============================================================
+    // Kompass-Buchstaben liegen auf fast demselben Radius (0.91*R) wie die
+    // Auf-/Untergangs-Labels (~R minus Einwärts-Versatz) — deshalb können
+    // sie sich decken. Die Kompass-Position bleibt fix (Referenzgitter),
+    // stattdessen wird das betroffene Auf-/Untergangs-Label schrittweise
+    // weiter nach innen (Richtung Zentrum) geschoben, bis es frei steht —
+    // es landet dadurch sichtbar UNTER/INNERHALB des Kompass-Buchstabens,
+    // statt ihn zu überschreiben.
+    // ============================================================
+    function resolveCompassCollisions(cx, cy, labels, compassPositions, riseSetFontSize) {
+      const halfHRiseSet = riseSetFontSize * 0.4;
+      const pad = size * 0.006;
+      const step = size * 0.01;
+
+      for (const l of labels) {
+        if (!l.pos) continue;
+        const rx = l.pos.x - cx, ry = l.pos.y - cy;
+        const rlen = Math.hypot(rx, ry) || 1;
+        const inX = -rx / rlen, inY = -ry / rlen;  // Richtung: nach innen zum Zentrum
+
+        for (let iter = 0; iter < 8; iter++) {
+          const collided = compassPositions.some(c => {
+            const dx = l.pos.lx - c.x, dy = l.pos.ly - c.y;
+            return Math.abs(dx) < (l.halfW || 0) + c.halfW + pad &&
+                   Math.abs(dy) < halfHRiseSet + c.halfH + pad;
+          });
+          if (!collided) break;
+          l.pos.lx += inX * step;
+          l.pos.ly += inY * step;
+        }
+      }
+    }
+
     function drawRiseSetLabel(pos, timeStr, color) {
       if (!pos) return;
 
@@ -835,19 +868,33 @@
       { label: 'NW', az: 315, main: false },
     ];
 
-    function drawCompass(cx, cy, R, rotation) {
+    // Kompass-Positionen + Text-Bounding-Box (halbe Breite/Höhe) — einmal
+    // berechnet, sowohl zum Zeichnen als auch zur Kollisionsvermeidung mit
+    // den Auf-/Untergangs-Labels genutzt (siehe resolveCompassCollisions).
+    function computeCompassLabelPositions(cx, cy, R, rotation) {
       // Hauptrichtungen größer als die Zifferblatt-Zahlen, Zwischenrichtungen kleiner
       const fontSizeMain  = Math.round(size * 0.040);
       const fontSizeInter = Math.round(size * 0.024);
 
-      for (const c of COMPASS_PTS) {
+      return COMPASS_PTS.map(c => {
         const clockAngle = normalizeAngle(c.az * Math.PI / 180 + rotation);
         const h = (clockAngle / (2 * Math.PI)) * 24;
         const [mx, my] = hourToXY(h, R * 0.91, cx, cy);
-        ctx.fillStyle = c.main ? COMPASS_COLOR_MAIN : COMPASS_COLOR_INTER;
-        ctx.font = (c.main ? 'bold ' : '') + (c.main ? fontSizeMain : fontSizeInter) + 'px system-ui, sans-serif';
+        const fontSize = c.main ? fontSizeMain : fontSizeInter;
+        const font = (c.main ? 'bold ' : '') + fontSize + 'px system-ui, sans-serif';
+        ctx.font = font;
+        const halfW = ctx.measureText(c.label).width / 2;
+        const halfH = fontSize * 0.4;
+        return { x: mx, y: my, halfW, halfH, font, label: c.label, color: c.main ? COMPASS_COLOR_MAIN : COMPASS_COLOR_INTER };
+      });
+    }
+
+    function drawCompass(compassPositions) {
+      for (const p of compassPositions) {
+        ctx.fillStyle = p.color;
+        ctx.font = p.font;
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(c.label, mx, my);
+        ctx.fillText(p.label, p.x, p.y);
       }
     }
 
@@ -1126,13 +1173,19 @@
           text: '↓ ' + formatTime(cachedMoonRiseSet.set), color: moonColor
         });
       }
+      const riseSetFontSize = size * 0.020;
       ctx.font = RISE_SET_FONT();
-      const labelMinSeparation = Math.max(...riseSetLabels.map(l => ctx.measureText(l.text).width), 0) + size * 0.015;
+      for (const l of riseSetLabels) l.halfW = ctx.measureText(l.text).width / 2;
+      const labelMinSeparation = Math.max(...riseSetLabels.map(l => l.halfW * 2), 0) + size * 0.015;
       resolveLabelCollisions(cx, cy, riseSetLabels, labelMinSeparation);
+
+      const compassPositions = computeCompassLabelPositions(cx, cy, R_sky, rotation);
+      resolveCompassCollisions(cx, cy, riseSetLabels, compassPositions, riseSetFontSize);
+
       for (const l of riseSetLabels) drawRiseSetLabel(l.pos, l.text, l.color);
 
       drawDial(cx, cy, R_outer, R_sky);                        // 5. Zifferblatt (außen)
-      drawCompass(cx, cy, R_sky, rotation);                    // 6. N/E/S/W (innen)
+      drawCompass(compassPositions);                           // 6. N/E/S/W (innen)
       drawHorizonRing(cx, cy, R_sky);                          // 7. Horizont-Ring
       drawSunHand(cx, cy, R_sky, sunData);                     // 8. Stundenzeiger
       drawMinuteHand(cx, cy, R_sky, now);                      // 9. Minutenzeiger

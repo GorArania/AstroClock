@@ -120,6 +120,19 @@ der Tangente des Horizontrings auseinandergeschoben, nicht radial und nicht
 zufällig. Bitte diesen Mechanismus beibehalten, falls weitere Labels
 (z. B. Planeten-Auf-/Untergänge) hinzukommen sollten.
 
+**Kollisionsfall Kompass-Beschriftung:** Die Kompass-Buchstaben (N/NO/O/…)
+liegen auf `R * 0.91`, die Auf-/Untergangs-Labels auf fast demselben Radius
+(`R` minus Einwärts-Versatz) — bei Ereignissen nahe einer Himmelsrichtung
+schrieb der Text bisher die Kompass-Buchstaben zu. Lösung in
+`resolveCompassCollisions`: Die Kompass-Position ist das feste Referenzraster
+und bleibt unverändert; das kollidierende Auf-/Untergangs-Label wird
+stattdessen schrittweise weiter nach innen (Richtung Zentrum) verschoben, bis
+es die Bounding-Box des Kompass-Buchstabens nicht mehr überlappt. Der
+Markierungspunkt bleibt wie immer exakt an der echten Position — nur der
+Text weicht aus. `drawCompass` bekommt die Positionen inzwischen aus
+`computeCompassLabelPositions` übergeben (einmal pro Frame berechnet), damit
+Zeichnen und Kollisionsprüfung dieselbe Geometrie verwenden.
+
 ---
 
 ## NICHT ÄNDERN OHNE RÜCKFRAGE: Mond-Auf-/Untergangszeiten-Suche
