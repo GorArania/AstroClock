@@ -1766,8 +1766,11 @@
       drawHorizonRing(cx, cy, R_sky);                          // 7. Horizont-Ring
       drawSunHand(cx, cy, R_sky, sunData);                     // 8. Stundenzeiger
       drawMinuteHand(cx, cy, R_sky, local);                    // 9. Minutenzeiger
-      drawMoon(cx, cy, R_sky, moonData);                       // 10. Mond
-      drawSun(cx, cy, R_sky, sunData);                         // 11. Sonne
+      drawSun(cx, cy, R_sky, sunData);                         // 10. Sonne
+      drawMoon(cx, cy, R_sky, moonData);                       // 11. Mond (über der Sonne —
+                                                               //     bei Neumond-Überdeckung steht
+                                                               //     der Mond VOR der Sonne, wie bei
+                                                               //     einer echten Sonnenfinsternis)
       drawCenter(cx, cy);                                      // 12. Mittelpunkt
 
       syncDateTimeInputs(local);
