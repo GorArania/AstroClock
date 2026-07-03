@@ -103,10 +103,22 @@ Auf-/Untergangs direkt ablesen, ohne dass eine (missverständliche) Linie über
 die Scheibe gezogen wird.
 
 Betroffene Funktionen: `computeSunRiseSet`, `computeMoonRiseSet`,
-`drawRiseSetLabel` (ersetzen die früheren `computeSunPath`, `computeMoonPath`,
-`drawPath`, `drawPathEndpointLabel`). Bitte hier nicht wieder eine
-Bahnlinie einführen, ohne das explizit abzusprechen — das war ein bewusster
-Rückbau auf Nutzerwunsch, kein Zwischenstand.
+`computeRiseSetLabelPos`, `drawRiseSetLabel` (ersetzen die früheren
+`computeSunPath`, `computeMoonPath`, `drawPath`, `drawPathEndpointLabel`).
+Bitte hier nicht wieder eine Bahnlinie einführen, ohne das explizit
+abzusprechen — das war ein bewusster Rückbau auf Nutzerwunsch, kein
+Zwischenstand.
+
+**Kollisionsfall Voll-/Neumond:** Nahe Neumond gehen Sonne und Mond am
+(fast) selben Azimut auf/unter, nahe Vollmond kann es je nach Jahreszeit
+ähnlich eng werden — dann würden sich die beiden Text-Labels decken.
+Lösung in `resolveLabelCollisions`: Der Markierungspunkt bleibt IMMER exakt
+an der echten Position (das ist gewollt und korrekt, auch wenn beide Punkte
+dadurch übereinanderliegen) — nur die Text-Beschriftung wird bei
+Unterschreiten des Mindestabstands (gemessene Textbreite + Puffer) entlang
+der Tangente des Horizontrings auseinandergeschoben, nicht radial und nicht
+zufällig. Bitte diesen Mechanismus beibehalten, falls weitere Labels
+(z. B. Planeten-Auf-/Untergänge) hinzukommen sollten.
 
 ---
 

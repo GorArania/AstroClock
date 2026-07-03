@@ -556,34 +556,72 @@
     // Das Label wird radial nach innen vom Horizont-Punkt versetzt, damit
     // es nicht das Zifferblatt überdeckt.
     // ============================================================
-    function drawRiseSetLabel(cx, cy, R, azDeg, rotation, timeStr, color) {
+    const RISE_SET_FONT = () => Math.round(size * 0.020) + 'px system-ui, sans-serif';
+
+    function computeRiseSetLabelPos(cx, cy, R, azDeg, rotation) {
       const [x, y] = skyToDialXY(azDeg, 0, rotation, cx, cy, R);
 
       // Richtung vom Mittelpunkt zum Horizont-Punkt
       const dx = x - cx, dy = y - cy;
       const dist = Math.sqrt(dx*dx + dy*dy);
-      if (dist < 1) return;
+      if (dist < 1) return null;
 
       // Label nach innen versetzen, weil der Endpunkt nahe am Rand ist
       const offset = -size * 0.045;  // negativ = nach innen
       const lx = x + (dx / dist) * offset;
       const ly = y + (dy / dist) * offset;
+      return { x, y, lx, ly };
+    }
 
-      // Kleiner Markierungspunkt am Endpunkt selbst
+    // ============================================================
+    // Kollisionsauflösung: Nahe Voll-/Neumond gehen Sonne und Mond am
+    // (fast) selben Azimut auf oder unter — die Punkte sollen dort bewusst
+    // exakt übereinanderliegen (das ist die korrekte, präzise Aussage),
+    // aber der Text darf sich nicht überdecken. Kollidierende Text-Labels
+    // werden entlang der Tangente des Horizontrings auseinandergeschoben
+    // (nicht radial), sodass sie sichtbar am Ring "entlanggleiten" statt
+    // sich zu überlagern oder wahllos zu verspringen.
+    // ============================================================
+    function resolveLabelCollisions(cx, cy, labels, minSeparation) {
+      for (let i = 0; i < labels.length; i++) {
+        for (let j = i + 1; j < labels.length; j++) {
+          const a = labels[i].pos, b = labels[j].pos;
+          if (!a || !b) continue;
+
+          const dx = b.lx - a.lx, dy = b.ly - a.ly;
+          const dist = Math.hypot(dx, dy);
+          if (dist >= minSeparation) continue;
+
+          // Tangente am Horizontring an dieser Stelle (senkrecht zum Radius)
+          const rx = a.lx - cx, ry = a.ly - cy;
+          const rlen = Math.hypot(rx, ry) || 1;
+          const tx = -ry / rlen, ty = rx / rlen;
+
+          const push = (minSeparation - dist) / 2 + 2;
+          a.lx -= tx * push; a.ly -= ty * push;
+          b.lx += tx * push; b.ly += ty * push;
+        }
+      }
+    }
+
+    function drawRiseSetLabel(pos, timeStr, color) {
+      if (!pos) return;
+
+      // Kleiner Markierungspunkt exakt am Ereignis-Ort (bleibt unverschoben)
       ctx.beginPath();
-      ctx.arc(x, y, 2.5, 0, 2 * Math.PI);
+      ctx.arc(pos.x, pos.y, 2.5, 0, 2 * Math.PI);
       ctx.fillStyle = color;
       ctx.fill();
 
       // Text mit dunklem Hintergrund-Halo (Lesbarkeit)
-      ctx.font         = Math.round(size * 0.020) + 'px system-ui, sans-serif';
+      ctx.font         = RISE_SET_FONT();
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
       ctx.lineWidth    = 3;
       ctx.strokeStyle  = 'rgba(11, 16, 32, 0.85)';
-      ctx.strokeText(timeStr, lx, ly);
+      ctx.strokeText(timeStr, pos.lx, pos.ly);
       ctx.fillStyle    = color;
-      ctx.fillText(timeStr, lx, ly);
+      ctx.fillText(timeStr, pos.lx, pos.ly);
     }
 
     function formatTime(date) {
@@ -1060,20 +1098,38 @@
 
       // 4. Auf-/Untergangs-Zeit-Labels für Sonne und Mond, an der jeweils
       //    echten Himmelsrichtung — Position pendelt mit der aktuellen
-      //    Rotation, genau wie der Kompass (siehe drawRiseSetLabel).
+      //    Rotation, genau wie der Kompass. Nahe Voll-/Neumond können
+      //    Sonne und Mond (fast) am selben Azimut auf-/untergehen — der
+      //    Punkt bleibt dann bewusst exakt gleich, aber die Texte werden
+      //    bei Bedarf auseinandergeschoben (siehe resolveLabelCollisions).
       updateRiseSetIfNeeded(now);
+      const sunColor  = 'rgba(255, 210, 130, 0.95)';
+      const moonColor = 'rgba(200, 220, 245, 0.95)';
+      const riseSetLabels = [];
       if (cachedSunRiseSet) {
-        drawRiseSetLabel(cx, cy, R_sky, cachedSunRiseSet.riseAz, rotation,
-          '↑ ' + formatTime(cachedSunRiseSet.rise), 'rgba(255, 210, 130, 0.95)');
-        drawRiseSetLabel(cx, cy, R_sky, cachedSunRiseSet.setAz, rotation,
-          '↓ ' + formatTime(cachedSunRiseSet.set),  'rgba(255, 210, 130, 0.95)');
+        riseSetLabels.push({
+          pos: computeRiseSetLabelPos(cx, cy, R_sky, cachedSunRiseSet.riseAz, rotation),
+          text: '↑ ' + formatTime(cachedSunRiseSet.rise), color: sunColor
+        });
+        riseSetLabels.push({
+          pos: computeRiseSetLabelPos(cx, cy, R_sky, cachedSunRiseSet.setAz, rotation),
+          text: '↓ ' + formatTime(cachedSunRiseSet.set), color: sunColor
+        });
       }
       if (cachedMoonRiseSet) {
-        drawRiseSetLabel(cx, cy, R_sky, cachedMoonRiseSet.riseAz, rotation,
-          '↑ ' + formatTime(cachedMoonRiseSet.rise), 'rgba(200, 220, 245, 0.95)');
-        drawRiseSetLabel(cx, cy, R_sky, cachedMoonRiseSet.setAz, rotation,
-          '↓ ' + formatTime(cachedMoonRiseSet.set),  'rgba(200, 220, 245, 0.95)');
+        riseSetLabels.push({
+          pos: computeRiseSetLabelPos(cx, cy, R_sky, cachedMoonRiseSet.riseAz, rotation),
+          text: '↑ ' + formatTime(cachedMoonRiseSet.rise), color: moonColor
+        });
+        riseSetLabels.push({
+          pos: computeRiseSetLabelPos(cx, cy, R_sky, cachedMoonRiseSet.setAz, rotation),
+          text: '↓ ' + formatTime(cachedMoonRiseSet.set), color: moonColor
+        });
       }
+      ctx.font = RISE_SET_FONT();
+      const labelMinSeparation = Math.max(...riseSetLabels.map(l => ctx.measureText(l.text).width), 0) + size * 0.015;
+      resolveLabelCollisions(cx, cy, riseSetLabels, labelMinSeparation);
+      for (const l of riseSetLabels) drawRiseSetLabel(l.pos, l.text, l.color);
 
       drawDial(cx, cy, R_outer, R_sky);                        // 5. Zifferblatt (außen)
       drawCompass(cx, cy, R_sky, rotation);                    // 6. N/E/S/W (innen)
