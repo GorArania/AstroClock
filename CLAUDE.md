@@ -430,6 +430,11 @@ verglichen:
   SW, W, NW). Hauptrichtungen (N/O/S/W) größer/heller, Zwischenrichtungen
   kleiner in derselben Farbe wie die Zwischenzeiten-Zahlen am Zifferblatt
   (`#aeb9c7`) — bewusst einheitliches Design.
+- **Zeichenreihenfolge Sonne/Mond:** Der Mond wird NACH der Sonne
+  gezeichnet und liegt bei Überschneidung obendrauf — bei
+  Neumond-Überdeckung steht der Mond so VOR der Sonne, wie bei einer
+  echten Sonnenfinsternis (getestet mit der SoFi vom 12.8.2026).
+  Bewusste Entscheidung, nicht wieder umdrehen.
 
 ---
 
