@@ -186,16 +186,20 @@ in der Bedienung des Pickers überschreiben. Bitte diese Fokus-Prüfung bei
 
 **Historische Daten inkl. v. Chr. (WICHTIG, nicht vereinfachen):** Ein
 `<input type="date">` kann prinzipiell KEINE Jahre vor 1 darstellen. Das
-Jahr lebt deshalb in einem separaten `#yearInput` (type="number",
-**astronomische Jahreszählung**: 0 = 1 v. Chr., −562 = 563 v. Chr.,
-Bereich −9999…9999). Der Jahresteil des date-Inputs wird beim Sync auf
-1…9999 geklemmt ("Proxy-Jahr") und ist per CSS ausgeblendet
-(`::-webkit-datetime-edit-year-field` — nur Chromium; in anderen Browsern
-erscheint das Jahr doppelt, harmlos). Wählt der Nutzer im Kalender-Popup
-gezielt ein anderes Jahr, gewinnt das Popup (Erkennung über
+Jahr lebt deshalb in einem separaten `#yearInput` (type="number", immer
+POSITIV, 1…9999) plus Umschalt-Knopf `#eraToggle` ("n. Chr." / "v. Chr.",
+ein Klick wechselt und springt sofort) — bewusst SO statt negativer
+Jahreszahlen, die als nicht intuitiv empfunden wurden (Nutzer-Feedback).
+Intern rechnet alles in **astronomischer Jahreszählung** (0 = 1 v. Chr.,
+−562 = 563 v. Chr. — es gibt historisch kein Jahr 0, daher Versatz um 1;
+Umrechnung: `eraFromAstroYear`/`astroYearFrom`). Der Jahresteil des
+date-Inputs wird beim Sync auf 1…9999 geklemmt ("Proxy-Jahr") und ist per
+CSS ausgeblendet (`::-webkit-datetime-edit-year-field` — nur Chromium; in
+anderen Browsern erscheint das Jahr doppelt, harmlos). Wählt der Nutzer im
+Kalender-Popup gezielt ein anderes Jahr, gewinnt das Popup (Erkennung über
 `lastSyncedDateValue`-Vergleich in `applyDateTimeInputs`), sonst gilt
-immer das Jahr-Feld. Drei Fallstricke, die dabei gelöst wurden — bitte
-nicht wieder einbauen:
+immer Jahr-Feld + Era-Knopf. Drei Fallstricke, die dabei gelöst wurden —
+bitte nicht wieder einbauen:
 1. `Date.UTC(80, …)` interpretiert Jahre 0–99 als 1900–1999 → Helfer
    `utcMs` mit `setUTCFullYear` benutzen.
 2. `Intl.formatToParts` liefert für v.-Chr.-Daten year="563" OHNE
