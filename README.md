@@ -35,6 +35,9 @@ geografisch Norden.
   stimmen dank eigener Sonnentheorie auch über Jahrtausende; der Himmel zu
   Buddhas Zeiten ist genauso abrufbar wie die Sonnenfinsternis vom 12.8.2026
 - **Zeitraffer:** vor- und rückwärts bis 14400×, im Kassettenrekorder-Look
+- **Über-Kopf-Modus:** ein Knopf spiegelt die komplette Anzeige horizontal —
+  zum Ablesen mit über den Kopf gehaltenem Gerät (wie eine spiegelverkehrt
+  gedruckte Planisphäre)
 
 ## Technik
 
