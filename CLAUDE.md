@@ -336,6 +336,39 @@ kontinuierliche Drehung nach parallaktischem Winkel (stilisierte Anzeige).
 
 ---
 
+## Über-Kopf-Modus (manueller Umschalt-Knopf oben rechts)
+
+Knopf `#overheadBtn` (🔃, oben rechts) spiegelt die komplette Zeichnung
+(Zifferblatt, Zeiger UND Sternenhimmel gemeinsam) horizontal — für die
+Haltung "Handy über den Kopf, von unten ablesen". Gleiche Physik wie
+spiegelverkehrt gedruckte Planisphären. **Bewusst manuell, KEIN Sensor**
+(passt zur Scope-Grenze: DeviceOrientation bleibt draußen).
+
+**Umsetzung** (in `tick()` und davor):
+- `overheadMode` (bool) + `toggleOverhead()` — schaltet nur den Modus und
+  die `active`-Klasse des Knopfs.
+- In `tick()` liegt der gesamte Zeichencode unverändert in einer
+  Pfeilfunktion `drawEverything`, umschlossen von `ctx.save()`/
+  `ctx.restore()`; bei aktivem Modus wird vorher `ctx.translate(size, 0);
+  ctx.scale(-1, 1)` gesetzt. `syncDateTimeInputs`/`setTimeout` bleiben
+  außerhalb.
+- **`withTextUnmirrored(drawFn)`**: überschreibt `ctx.fillText`/
+  `ctx.strokeText` temporär so, dass die Spiegelung lokal pro Textaufruf
+  aufgehoben wird (translate zum Anker + `scale(-1,1)`) — nur die
+  POSITIONEN spiegeln, die Glyphen bleiben lesbar.
+- **Wichtig, nicht entfernen — textAlign-Tausch:** Innerhalb der
+  Überschreibung wird `textAlign` `left`↔`right` getauscht. Ohne das
+  liefe links-/rechtsbündiger Text (betrifft die Planeten-Labels, alles
+  andere ist zentriert) vom gespiegelten Anker aus in die falsche
+  Richtung und schriebe z. B. über den Planeten-Punkt. Verifiziert:
+  normal steht "Mars" rechts von seinem Punkt, gespiegelt links davon —
+  konsistent mit der Szene, Schrift lesbar.
+- Die Rotationsformel (`rotation = sunClockAngle − azimuthFromNorth`)
+  ist davon KOMPLETT unberührt — reiner Anzeige-Transform am Ende der
+  Pipeline, keine Änderung an der Himmelsmathematik.
+
+---
+
 ## NICHT ÄNDERN OHNE RÜCKFRAGE: Mond-Auf-/Untergangszeiten-Suche
 
 **Grundproblem (einmal falsch gelöst, dann gefixt):** Auf- und Untergang

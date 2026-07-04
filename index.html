@@ -127,6 +127,33 @@
       text-shadow: 0 0 6px rgba(255,138,61,0.6);
       letter-spacing: 0.5px;
     }
+    /* Über-Kopf-Umschalt-Knopf (manuell, kein Sensor), oben rechts */
+    #overheadBtn {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      width: 46px; height: 40px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-size: 19px;
+      color: #d8dde2;
+      background: linear-gradient(180deg, #3a3d42 0%, #232528 60%, #1a1c1e 100%);
+      box-shadow:
+        0 2px 0 rgba(255,255,255,0.06) inset,
+        0 -2px 4px rgba(0,0,0,0.5) inset,
+        0 4px 10px rgba(0,0,0,0.4);
+      transition: transform 0.05s, background 0.15s, color 0.15s;
+    }
+    #overheadBtn:active { transform: translateY(1px); }
+    #overheadBtn.active {
+      color: #ffd866;
+      background: linear-gradient(180deg, #4a3f28 0%, #2e2618 60%, #201a10 100%);
+      box-shadow:
+        0 2px 0 rgba(255,216,102,0.15) inset,
+        0 -2px 4px rgba(0,0,0,0.5) inset,
+        0 0 10px rgba(255,216,102,0.35);
+    }
   </style>
 </head>
 <body>
@@ -149,6 +176,9 @@
         aria-label="Standort" placeholder="Stadt oder Koordinaten">
     </div>
   </div>
+
+  <!-- Über-Kopf-Modus: manueller Umschalter, spiegelt die komplette Zeichnung -->
+  <button id="overheadBtn" onclick="toggleOverhead()" title="Über-Kopf-Ansicht umschalten (spiegelt Zifferblatt, Zeiger und Himmel)">🔃</button>
 
   <!-- VORLÄUFIG: Zeitsteuerung zum Testen/Demonstrieren -->
   <div id="transport">
@@ -1683,6 +1713,45 @@
     // ============================================================
     let size = 0;
 
+    // Über-Kopf-Modus: spiegelt Zifferblatt + Zeiger + Himmel GEMEINSAM
+    // (nur Positionen, Schrift bleibt lesbar). Manueller Knopf, kein Sensor —
+    // für die Haltung "Handy über den Kopf, von unten ablesen" (gleiche
+    // Physik wie spiegelverkehrt gedruckte Planisphären).
+    let overheadMode = false;
+
+    function toggleOverhead() {
+      overheadMode = !overheadMode;
+      const btn = document.getElementById('overheadBtn');
+      if (btn) btn.classList.toggle('active', overheadMode);
+    }
+
+    // Hebt die globale Spiegelung lokal pro Textaufruf wieder auf, damit
+    // die Glyphen lesbar bleiben. Links-/rechtsbündige Ausrichtung muss
+    // dabei die Seite wechseln (betrifft die Planeten-Labels): Der Anker
+    // spiegelt mit der Szene, also muss der Text vom Anker aus in die
+    // jeweils andere Richtung laufen — sonst schriebe z. B. ein Label,
+    // das rechts vom Planeten stand, nach der Spiegelung ÜBER den Planeten.
+    // Zentrierter Text (Zifferblatt, Kompass, Zeit-Labels) ist unberührt.
+    function withTextUnmirrored(drawFn) {
+      const origFillText   = ctx.fillText.bind(ctx);
+      const origStrokeText = ctx.strokeText.bind(ctx);
+      const unmirror = (orig) => function(text, x, y, maxWidth) {
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.scale(-1, 1);
+        if      (ctx.textAlign === 'left')  ctx.textAlign = 'right';
+        else if (ctx.textAlign === 'right') ctx.textAlign = 'left';
+        orig(text, 0, 0, maxWidth);
+        ctx.restore();
+      };
+      ctx.fillText   = unmirror(origFillText);
+      ctx.strokeText = unmirror(origStrokeText);
+      try { drawFn(); } finally {
+        ctx.fillText   = origFillText;
+        ctx.strokeText = origStrokeText;
+      }
+    }
+
     function tick() {
       const now     = getVirtualNow();       // virtuelle Zeit (Zeitraffer-Feature)
       const local   = getLocalParts(now);    // Ortszeit des gewählten Standorts
@@ -1706,72 +1775,91 @@
       const compassPositions = computeCompassLabelPositions(cx, cy, R_sky, rotation);
 
       ctx.clearRect(0, 0, size, size);
-      drawSkyBackground(cx, cy, R_sky, sunData);                // 0. Naturalistischer Himmel
 
-      updatePrecession(now);                                    // J2000 → aktuelle Epoche (gecacht)
-      drawStarField(cx, cy, R_sky, rotation, lstDeg, sunData.altitudeDeg);          // 1. Sterne
-      drawConstellations(cx, cy, R_sky, rotation, lstDeg, sunData.altitudeDeg);     // 2. Sternbild-Linien
-
-      // 3. Planeten (über Sternen, unter Mond/Sonne)
-      computePlanetPositions(now, lstDeg);
-      drawPlanets(cx, cy, R_sky, rotation, sunData.altitudeDeg, compassPositions);
-
-      // 4. Auf-/Untergangs-Zeit-Labels für Sonne und Mond, an der jeweils
-      //    echten Himmelsrichtung — Position pendelt mit der aktuellen
-      //    Rotation, genau wie der Kompass. Nahe Voll-/Neumond können
-      //    Sonne und Mond (fast) am selben Azimut auf-/untergehen — der
-      //    Punkt bleibt dann bewusst exakt gleich, aber die Texte werden
-      //    bei Bedarf auseinandergeschoben (siehe resolveLabelCollisions).
-      updateRiseSetIfNeeded(now, local);
-      const sunColor  = 'rgba(255, 210, 130, 0.95)';
-      const moonColor = 'rgba(200, 220, 245, 0.95)';
-      const riseSetLabels = [];
-      if (cachedSunRiseSet) {
-        riseSetLabels.push({
-          pos: computeRiseSetLabelPos(cx, cy, R_sky, cachedSunRiseSet.riseAz, rotation),
-          text: '↑ ' + formatTime(cachedSunRiseSet.rise), color: sunColor
-        });
-        riseSetLabels.push({
-          pos: computeRiseSetLabelPos(cx, cy, R_sky, cachedSunRiseSet.setAz, rotation),
-          text: '↓ ' + formatTime(cachedSunRiseSet.set), color: sunColor
-        });
-      }
-      if (cachedMoonRiseSet) {
-        riseSetLabels.push({
-          pos: computeRiseSetLabelPos(cx, cy, R_sky, cachedMoonRiseSet.riseAz, rotation),
-          text: '↑ ' + formatTime(cachedMoonRiseSet.rise), color: moonColor
-        });
-        riseSetLabels.push({
-          pos: computeRiseSetLabelPos(cx, cy, R_sky, cachedMoonRiseSet.setAz, rotation),
-          text: '↓ ' + formatTime(cachedMoonRiseSet.set), color: moonColor
-        });
-      }
-      const riseSetFontSize = Math.round(size * 0.020);  // identisch zu RISE_SET_FONT
-      ctx.font = RISE_SET_FONT();
-      for (const l of riseSetLabels) l.halfW = ctx.measureText(l.text).width / 2;
-      const labelMinSeparation = Math.max(...riseSetLabels.map(l => l.halfW * 2), 0) + size * 0.015;
-
-      // Mehrere Runden abwechselnd auflösen: Das Ausweichen vor dem Kompass
-      // kann ein Label in den Weg eines anderen Zeit-Labels schieben (und
-      // umgekehrt) — ein einzelner Durchlauf reichte dafür manchmal nicht.
-      for (let round = 0; round < 3; round++) {
-        resolveLabelCollisions(cx, cy, riseSetLabels, labelMinSeparation);
-        resolveCompassCollisions(cx, cy, riseSetLabels, compassPositions, riseSetFontSize);
+      // Über-Kopf-Modus: komplette Zeichnung horizontal spiegeln — nur die
+      // Positionen; die Schrift bleibt via withTextUnmirrored lesbar.
+      ctx.save();
+      if (overheadMode) {
+        ctx.translate(size, 0);
+        ctx.scale(-1, 1);
       }
 
-      for (const l of riseSetLabels) drawRiseSetLabel(l.pos, l.text, l.color);
+      const drawEverything = () => {
+        drawSkyBackground(cx, cy, R_sky, sunData);                // 0. Naturalistischer Himmel
 
-      drawDial(cx, cy, R_outer, R_sky);                        // 5. Zifferblatt (außen)
-      drawCompass(compassPositions);                           // 6. N/E/S/W (innen)
-      drawHorizonRing(cx, cy, R_sky);                          // 7. Horizont-Ring
-      drawSunHand(cx, cy, R_sky, sunData);                     // 8. Stundenzeiger
-      drawMinuteHand(cx, cy, R_sky, local);                    // 9. Minutenzeiger
-      drawSun(cx, cy, R_sky, sunData);                         // 10. Sonne
-      drawMoon(cx, cy, R_sky, moonData);                       // 11. Mond (über der Sonne —
-                                                               //     bei Neumond-Überdeckung steht
-                                                               //     der Mond VOR der Sonne, wie bei
-                                                               //     einer echten Sonnenfinsternis)
-      drawCenter(cx, cy);                                      // 12. Mittelpunkt
+        updatePrecession(now);                                    // J2000 → aktuelle Epoche (gecacht)
+        drawStarField(cx, cy, R_sky, rotation, lstDeg, sunData.altitudeDeg);          // 1. Sterne
+        drawConstellations(cx, cy, R_sky, rotation, lstDeg, sunData.altitudeDeg);     // 2. Sternbild-Linien
+
+        // 3. Planeten (über Sternen, unter Mond/Sonne)
+        computePlanetPositions(now, lstDeg);
+        drawPlanets(cx, cy, R_sky, rotation, sunData.altitudeDeg, compassPositions);
+
+        // 4. Auf-/Untergangs-Zeit-Labels für Sonne und Mond, an der jeweils
+        //    echten Himmelsrichtung — Position pendelt mit der aktuellen
+        //    Rotation, genau wie der Kompass. Nahe Voll-/Neumond können
+        //    Sonne und Mond (fast) am selben Azimut auf-/untergehen — der
+        //    Punkt bleibt dann bewusst exakt gleich, aber die Texte werden
+        //    bei Bedarf auseinandergeschoben (siehe resolveLabelCollisions).
+        updateRiseSetIfNeeded(now, local);
+        const sunColor  = 'rgba(255, 210, 130, 0.95)';
+        const moonColor = 'rgba(200, 220, 245, 0.95)';
+        const riseSetLabels = [];
+        if (cachedSunRiseSet) {
+          riseSetLabels.push({
+            pos: computeRiseSetLabelPos(cx, cy, R_sky, cachedSunRiseSet.riseAz, rotation),
+            text: '↑ ' + formatTime(cachedSunRiseSet.rise), color: sunColor
+          });
+          riseSetLabels.push({
+            pos: computeRiseSetLabelPos(cx, cy, R_sky, cachedSunRiseSet.setAz, rotation),
+            text: '↓ ' + formatTime(cachedSunRiseSet.set), color: sunColor
+          });
+        }
+        if (cachedMoonRiseSet) {
+          riseSetLabels.push({
+            pos: computeRiseSetLabelPos(cx, cy, R_sky, cachedMoonRiseSet.riseAz, rotation),
+            text: '↑ ' + formatTime(cachedMoonRiseSet.rise), color: moonColor
+          });
+          riseSetLabels.push({
+            pos: computeRiseSetLabelPos(cx, cy, R_sky, cachedMoonRiseSet.setAz, rotation),
+            text: '↓ ' + formatTime(cachedMoonRiseSet.set), color: moonColor
+          });
+        }
+        const riseSetFontSize = Math.round(size * 0.020);  // identisch zu RISE_SET_FONT
+        ctx.font = RISE_SET_FONT();
+        for (const l of riseSetLabels) l.halfW = ctx.measureText(l.text).width / 2;
+        const labelMinSeparation = Math.max(...riseSetLabels.map(l => l.halfW * 2), 0) + size * 0.015;
+
+        // Mehrere Runden abwechselnd auflösen: Das Ausweichen vor dem Kompass
+        // kann ein Label in den Weg eines anderen Zeit-Labels schieben (und
+        // umgekehrt) — ein einzelner Durchlauf reichte dafür manchmal nicht.
+        for (let round = 0; round < 3; round++) {
+          resolveLabelCollisions(cx, cy, riseSetLabels, labelMinSeparation);
+          resolveCompassCollisions(cx, cy, riseSetLabels, compassPositions, riseSetFontSize);
+        }
+
+        for (const l of riseSetLabels) drawRiseSetLabel(l.pos, l.text, l.color);
+
+        drawDial(cx, cy, R_outer, R_sky);                        // 5. Zifferblatt (außen)
+        drawCompass(compassPositions);                           // 6. N/E/S/W (innen)
+        drawHorizonRing(cx, cy, R_sky);                          // 7. Horizont-Ring
+        drawSunHand(cx, cy, R_sky, sunData);                     // 8. Stundenzeiger
+        drawMinuteHand(cx, cy, R_sky, local);                    // 9. Minutenzeiger
+        drawSun(cx, cy, R_sky, sunData);                         // 10. Sonne
+        drawMoon(cx, cy, R_sky, moonData);                       // 11. Mond (über der Sonne —
+                                                                 //     bei Neumond-Überdeckung steht
+                                                                 //     der Mond VOR der Sonne, wie bei
+                                                                 //     einer echten Sonnenfinsternis)
+        drawCenter(cx, cy);                                      // 12. Mittelpunkt
+      };
+
+      if (overheadMode) {
+        withTextUnmirrored(drawEverything);
+      } else {
+        drawEverything();
+      }
+
+      ctx.restore();
 
       syncDateTimeInputs(local);
 
