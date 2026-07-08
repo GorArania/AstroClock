@@ -8,3 +8,7 @@ phase2/*.iml
 # System
 .DS_Store
 Thumbs.db
+
+# Interne Entwickler-Doku und Claude-Code-Einstellungen (nicht öffentlich)
+/CLAUDE.md
+/.claude/
