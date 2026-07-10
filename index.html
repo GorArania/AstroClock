@@ -1290,7 +1290,7 @@
 
     // ============================================================
     const COMPASS_COLOR_MAIN  = 'rgba(225, 235, 248, 0.95)';  // N/O/S/W
-    const COMPASS_COLOR_INTER = '#aeb9c7';                     // NO/SO/SW/NW — wie Zwischenzeiten
+    const COMPASS_COLOR_INTER = 'rgba(255, 255, 255, 0.92)';   // NO/SO/SW/NW — weiß (Nutzerwunsch 10.7.2026)
 
     const COMPASS_PTS = [
       { label: 'N',  az: 0,   main: true  },
@@ -1645,9 +1645,48 @@
       }
     }
 
-    function drawHorizonRing(cx, cy, R) {
-      ctx.beginPath(); ctx.arc(cx,cy,R,0,2*Math.PI);
-      ctx.setLineDash([4,8]); ctx.strokeStyle='rgba(100,130,170,0.3)'; ctx.lineWidth=1; ctx.stroke(); ctx.setLineDash([]);
+    function drawHorizonRing(cx, cy, R, rotation) {
+      // 360°-Azimut-Skala als Horizont-Umrandung (ersetzt gestrichelte
+      // Linie UND durchgezogenen Innen-Ring). Hierarchie wie bei einer
+      // klassischen Kompassrose, immer per Halbierung: Haupt-Himmels-
+      // richtungen N/O/S/W (90°) am größten, dann NO/SO/SW/NW (45°),
+      // dann NNO/ONO/... (22,5°), Grundstriche alle 5°. Striche radial,
+      // mittig auf dem Ring; dreht mit DERSELBEN Rotation wie die
+      // Kompass-Buchstaben (90°/45°-Striche liegen exakt auf N/NO/...).
+      // Iteration in 2,5°-Schritten, damit die 22,5°-Marken exakt
+      // getroffen werden (sie liegen ZWISCHEN dem 5°-Raster).
+      const TIERS = [
+        { mod: 36, len: size*0.030, w: 2.5, color: 'rgba(255,255,255,0.95)' }, // 90°  N/O/S/W
+        { mod: 18, len: size*0.024, w: 2.0, color: 'rgba(255,255,255,0.88)' }, // 45°  NO/SO/...
+        { mod:  9, len: size*0.018, w: 1.6, color: 'rgba(255,255,255,0.78)' }, // 22,5° NNO/ONO/...
+        { mod:  2, len: size*0.010, w: 1.0, color: 'rgba(255,255,255,0.55)' }, // 5°   Grundstriche
+      ];
+      // Zusätzlich (versuchsweise, 10.7.2026): kleiner weißer Punkt bei
+      // JEDEM Grad — nur dort, wo kein Strich sitzt (kein 5°-Vielfaches).
+      const degDotR = Math.max(0.6, size * 0.0011);
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      for (let az = 0; az < 360; az++) {
+        if (az % 5 === 0) continue;
+        const clockAngle = normalizeAngle(az * Math.PI / 180 + rotation);
+        const h = (clockAngle / (2 * Math.PI)) * 24;
+        const [x, y] = hourToXY(h, R, cx, cy);
+        ctx.beginPath(); ctx.arc(x, y, degDotR, 0, 2*Math.PI); ctx.fill();
+      }
+      for (let k = 0; k < 144; k++) {          // k * 2,5° = Azimut
+        const tier = TIERS.find(t => k % t.mod === 0);
+        if (!tier) continue;                   // 2,5°-Zwischenwerte ohne Marke
+        const az = k * 2.5;
+        const clockAngle = normalizeAngle(az * Math.PI / 180 + rotation);
+        const h = (clockAngle / (2 * Math.PI)) * 24;
+        const [x, y] = hourToXY(h, R, cx, cy);
+        const ux = (x - cx) / R, uy = (y - cy) / R;   // radiale Richtung
+        ctx.beginPath();
+        ctx.moveTo(x - ux*tier.len/2, y - uy*tier.len/2);
+        ctx.lineTo(x + ux*tier.len/2, y + uy*tier.len/2);
+        ctx.strokeStyle = tier.color;
+        ctx.lineWidth = tier.w;
+        ctx.stroke();
+      }
     }
 
     function drawDial(cx, cy, R_outer, R_sky) {
@@ -1657,9 +1696,8 @@
       ctx.beginPath(); ctx.arc(cx,cy,R_outer,0,2*Math.PI);
       ctx.strokeStyle='#cdd6e0'; ctx.lineWidth=2; ctx.stroke();
 
-      // Innerer Ring (= Horizont-Grenze) — dünn, verbindet Zifferblatt mit Himmelskuppel
-      ctx.beginPath(); ctx.arc(cx,cy,R_sky,0,2*Math.PI);
-      ctx.strokeStyle='rgba(180,200,220,0.30)'; ctx.lineWidth=1; ctx.stroke();
+      // (Kein durchgezogener Innen-Ring mehr — die Azimut-Skala in
+      // drawHorizonRing IST jetzt die Horizont-Umrandung.)
 
       // Zahlen in der Mitte des Bands — Font-Größe an Band-Breite angepasst
       const numR     = R_sky + bandW * 0.52;  // Zahlen etwas weiter innen
@@ -1846,7 +1884,7 @@
 
         drawDial(cx, cy, R_outer, R_sky);                        // 5. Zifferblatt (außen)
         drawCompass(compassPositions);                           // 6. N/E/S/W (innen)
-        drawHorizonRing(cx, cy, R_sky);                          // 7. Horizont-Ring
+        drawHorizonRing(cx, cy, R_sky, rotation);                // 7. Horizont-Ring (Azimut-Skala)
         drawSunHand(cx, cy, R_sky, sunData);                     // 8. Stundenzeiger
         drawMinuteHand(cx, cy, R_sky, local);                    // 9. Minutenzeiger
         drawSun(cx, cy, R_sky, sunData);                         // 10. Sonne
