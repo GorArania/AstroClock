@@ -1519,29 +1519,26 @@
     // Alle Zeichenfunktionen (unverändert aus Schritt 3/4)
     // ============================================================
 
-    function drawMoonPhase(cx, cy, r, phase, mirrorX) {
+    function drawMoonPhase(cx, cy, r, phase, litAngle) {
       const dark = '#1a2840', lit = '#dde8f5';
       ctx.save();
-      // Südhalbkugel: Mond erscheint horizontal gespiegelt (zunehmend = links beleuchtet)
-      if (mirrorX) { ctx.translate(cx, cy); ctx.scale(-1, 1); ctx.translate(-cx, -cy); }
+      // Helle Seite zeigt zur GEZEICHNETEN Sonnenposition auf der Scheibe
+      // (litAngle = Bildschirmwinkel Mond→Sonne). Im so gedrehten
+      // Bezugssystem gilt eine einzige Terminator-Formel für zu- UND
+      // abnehmende Phasen; die frühere binäre Südhalbkugel-Spiegelung
+      // ist damit überflüssig (ergibt sich automatisch aus dem Sonnenstand).
+      ctx.translate(cx, cy); ctx.rotate(litAngle); ctx.translate(-cx, -cy);
       ctx.beginPath(); ctx.arc(cx, cy, r, 0, 2*Math.PI); ctx.clip();
       ctx.fillStyle = dark; ctx.fillRect(cx-r-1, cy-r-1, 2*r+2, 2*r+2);
-      const waxing = phase <= 0.5;
       ctx.fillStyle = lit;
-      if (waxing) { ctx.beginPath(); ctx.arc(cx,cy,r,-Math.PI/2,Math.PI/2); ctx.closePath(); ctx.fill(); }
-      else        { ctx.beginPath(); ctx.arc(cx,cy,r,Math.PI/2,3*Math.PI/2); ctx.closePath(); ctx.fill(); }
+      ctx.beginPath(); ctx.arc(cx,cy,r,-Math.PI/2,Math.PI/2); ctx.closePath(); ctx.fill();
       const termX = r * Math.cos(phase * 2 * Math.PI);
-      if (waxing) {
-        if (termX > 0) { ctx.fillStyle=dark; ctx.beginPath(); ctx.ellipse(cx,cy,termX,r,0,-Math.PI/2,Math.PI/2); ctx.closePath(); ctx.fill(); }
-        if (termX < 0) { ctx.fillStyle=lit;  ctx.beginPath(); ctx.ellipse(cx,cy,-termX,r,0,Math.PI/2,3*Math.PI/2); ctx.closePath(); ctx.fill(); }
-      } else {
-        if (termX < 0) { ctx.fillStyle=lit;  ctx.beginPath(); ctx.ellipse(cx,cy,-termX,r,0,-Math.PI/2,Math.PI/2); ctx.closePath(); ctx.fill(); }
-        if (termX > 0) { ctx.fillStyle=dark; ctx.beginPath(); ctx.ellipse(cx,cy,termX,r,0,Math.PI/2,3*Math.PI/2); ctx.closePath(); ctx.fill(); }
-      }
+      if (termX > 0) { ctx.fillStyle=dark; ctx.beginPath(); ctx.ellipse(cx,cy,termX,r,0,-Math.PI/2,Math.PI/2); ctx.closePath(); ctx.fill(); }
+      if (termX < 0) { ctx.fillStyle=lit;  ctx.beginPath(); ctx.ellipse(cx,cy,-termX,r,0,Math.PI/2,3*Math.PI/2); ctx.closePath(); ctx.fill(); }
       ctx.restore();
     }
 
-    function drawMoon(cx, cy, R, moonData) {
+    function drawMoon(cx, cy, R, moonData, sunData) {
       const { h, altitudeDeg, isAboveHorizon, phase } = moonData;
 
       // FIX: Mond unter dem Horizont → gar nicht anzeigen
@@ -1555,7 +1552,14 @@
       const glow = ctx.createRadialGradient(mx,my,0,mx,my,moonSize*3);
       glow.addColorStop(0,'rgba(180,205,235,0.22)'); glow.addColorStop(1,'rgba(180,205,235,0)');
       ctx.beginPath(); ctx.arc(mx,my,moonSize*3,0,2*Math.PI); ctx.fillStyle=glow; ctx.fill();
-      drawMoonPhase(mx, my, moonSize, phase, LAT < 0);
+      // Beleuchtungsrichtung: helle Mondseite zeigt zur gezeichneten
+      // Sonnenposition (gleiche Radius-Formel wie in drawSun). Nahe
+      // Neumond liegen beide Punkte fast übereinander — Richtung dann
+      // unbestimmt, aber der Mond ist dort ohnehin (fast) ganz dunkel.
+      const sunR = ((90-Math.abs(sunData.altitudeDeg))/90)*R;
+      const [sx,sy] = hourToXY(sunData.h, sunR, cx, cy);
+      const litAngle = (Math.hypot(sx-mx, sy-my) > 1e-3) ? Math.atan2(sy-my, sx-mx) : 0;
+      drawMoonPhase(mx, my, moonSize, phase, litAngle);
       ctx.beginPath(); ctx.arc(mx,my,moonSize,0,2*Math.PI);
       ctx.strokeStyle='rgba(150,180,220,0.55)'; ctx.lineWidth=1; ctx.stroke();
       ctx.globalAlpha=1.0;
@@ -1846,7 +1850,7 @@
         drawSunHand(cx, cy, R_sky, sunData);                     // 8. Stundenzeiger
         drawMinuteHand(cx, cy, R_sky, local);                    // 9. Minutenzeiger
         drawSun(cx, cy, R_sky, sunData);                         // 10. Sonne
-        drawMoon(cx, cy, R_sky, moonData);                       // 11. Mond (über der Sonne —
+        drawMoon(cx, cy, R_sky, moonData, sunData);              // 11. Mond (über der Sonne —
                                                                  //     bei Neumond-Überdeckung steht
                                                                  //     der Mond VOR der Sonne, wie bei
                                                                  //     einer echten Sonnenfinsternis)
