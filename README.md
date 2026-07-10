@@ -26,7 +26,8 @@ geografisch Norden.
   eingestellte Epoche gerechnet
 - **Sonne, Mond (mit Phase) und fünf Planeten**, vollständig selbst
   implementiert nach Jean Meeus, *Astronomical Algorithms* (inkl.
-  ΔT-Korrektur der Erdrotation)
+  ΔT-Korrektur der Erdrotation); die Mondphase ist wie am echten Himmel
+  ausgerichtet — die helle Seite zeigt stets zur Sonne
 - **Auf-/Untergangszeiten** von Sonne und Mond als Labels an der echten
   Himmelsrichtung
 - **Ort frei wählbar:** Stadtname/Adresse (via OpenStreetMap Nominatim) oder
@@ -57,10 +58,10 @@ Jahreszeiten über ±5000 Jahre; Mond ~0,2° (heute) / ~1° (Antike);
 Planeten ~1–2°; Sternpositionen mit Präzession (Meeus Kap. 21), ohne
 Eigenbewegung.
 
-Die Datei `CLAUDE.md` dokumentiert die Design-Entscheidungen im Detail.
+## Android-App
 
-## Ausblick (Phase 2)
-
-Verpackung als Android-App (WebView) mit GPS-Ortung — wird separat
-entwickelt, dieses Repo enthält die Web-App (Phase 1). Die historischen
+Die zugehörige Android-App (WebView-Hülle mit GPS-Ortung) wird als
+eigenständiges Projekt im Repo
+[AstroClockApp](https://github.com/GorArania/AstroClockApp) entwickelt.
+Dieses Repo enthält ausschließlich die Web-App. Die historischen
 Zwischenschritte der Entwicklung liegen unter `phase1/`.
