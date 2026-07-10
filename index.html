@@ -1702,23 +1702,24 @@
       // Zahlen in der Mitte des Bands — Font-Größe an Band-Breite angepasst
       const numR     = R_sky + bandW * 0.52;  // Zahlen etwas weiter innen
       const fontSize = Math.round(Math.min(bandW * 0.48, size * 0.032));
+      const mainFontSize = Math.round(fontSize * 1.25);   // 24/6/12/18 etwas größer
 
       for (let h=0; h<24; h++) {
         const isMain  = (h % 6 === 0);
-        // Viel kürzere Teilstriche — nur dezente Markierungen
-        const tickLen = isMain ? bandW * 0.28 : bandW * 0.16;
+        // Hauptstriche kürzer, damit sie die (größeren) Hauptzahlen nicht berühren
+        const tickLen = isMain ? bandW * 0.14 : bandW * 0.16;
         const [x1,y1] = hourToXY(h, R_outer, cx, cy);
         const [x2,y2] = hourToXY(h, R_outer - tickLen, cx, cy);
 
         ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2);
         ctx.lineWidth=isMain?2.5:1.2;
-        ctx.strokeStyle=isMain?'#ffffff':'#8a97a8'; ctx.stroke();
+        ctx.strokeStyle='#ffffff'; ctx.stroke();   // alle Teilstriche weiß
 
         const [nx,ny] = hourToXY(h, numR, cx, cy);
-        ctx.fillStyle    = isMain ? '#ffffff' : '#aeb9c7';
-        ctx.font         = (isMain ? 'bold ' : '') + fontSize + 'px system-ui, sans-serif';
+        ctx.fillStyle    = '#ffffff';   // alle Zahlen weiß
+        ctx.font         = (isMain ? 'bold ' + mainFontSize : fontSize) + 'px system-ui, sans-serif';
         ctx.textAlign    = 'center'; ctx.textBaseline = 'middle';
-        ctx.fillText(String(h), nx, ny);
+        ctx.fillText(h === 0 ? '24' : String(h), nx, ny);   // 0 → 24
       }
     }
 
